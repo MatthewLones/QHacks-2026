@@ -17,6 +17,23 @@ Each entry includes what changed, why it was changed, and which files were affec
 
 ---
 
+## [Session 9] - 2026-02-07
+
+### Added
+- **Gemini integration analysis doc** — Created `docs/GEMINI_INTEGRATION.md` documenting the full voice pipeline flow, Gemini conversation history mechanics, function calling protocol, all 4 tool call definitions, and session state architecture. Written as reference for both team members.
+  - `docs/GEMINI_INTEGRATION.md` — New file
+
+### Fixed
+- **Function calls now produce voice responses** — When Gemini made a function call (e.g. `suggest_location`, `trigger_world_generation`), the function was executed but Gemini was never called again to generate the follow-up voice response. The guide would go silent after any tool use. Fixed by adding a function-call loop in `_process_gemini_response()`: after executing function calls and adding results to history, Gemini is called again (with `user_text=None`) to produce the natural language follow-up. Loop runs up to `MAX_FUNCTION_ROUNDS=3` to support chained calls.
+  - `backend/routers/voice.py` — Wrapped Gemini streaming in a `for round_num in range(MAX_FUNCTION_ROUNDS + 1)` loop. Tracks `function_calls_this_round`; breaks on pure text response; continues with `input_text=None` after function calls.
+  - `backend/services/gemini_guide.py` — Made `user_text` parameter optional (`str | None = None`). When `None`, skips appending a user message and calls Gemini with the existing history (which contains the function result from `add_function_result()`).
+
+### Changed
+- **Cleaned up debug logging in gemini_guide.py** — Replaced verbose `print()` statements with structured `logger.info()` and `logger.debug()` calls. Key milestones logged at INFO level, history dumps at DEBUG level.
+  - `backend/services/gemini_guide.py` — All `print(f"[GEMINI_GUIDE]...")` → `logger.info/debug(...)`
+
+---
+
 ## [Session 6/7/8] - 2026-02-07
 
 ### Added

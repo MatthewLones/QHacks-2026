@@ -196,25 +196,40 @@ async def _process_gemini_response(
 
             tts_recv_task = asyncio.create_task(forward_tts_audio())
 
-        # Stream Gemini response — text always goes to frontend, TTS if available
+        # Stream Gemini response — text always goes to frontend, TTS if available.
+        # Loop handles function calling: after executing function calls and adding
+        # results to history, call Gemini again to get the follow-up voice response.
+        MAX_FUNCTION_ROUNDS = 3
         gemini_chunk_count = 0
         full_response_text = ""
-        async for chunk in gemini.generate_response(user_text):
-            if chunk["type"] == "text":
-                text_piece = chunk["text"]
-                full_response_text += text_piece
-                gemini_chunk_count += 1
-                print(f"[{_ts()}][GEMINI] Chunk #{gemini_chunk_count}: \"{text_piece}\"")
-                await _send_json(ws, {"type": "guide_text", "text": text_piece}, closed)
-                if tts_stream:
-                    await tts_stream.send_text(text_piece)
+        input_text: str | None = user_text
 
-            elif chunk["type"] == "function_call":
-                print(f"[{_ts()}][GEMINI] Function call: {chunk['name']}")
-                await _handle_function_call(chunk, ws, gemini, world_labs, closed)
+        for round_num in range(MAX_FUNCTION_ROUNDS + 1):
+            function_calls_this_round = []
 
-        print(f"[{_ts()}][GEMINI] Response complete. {gemini_chunk_count} chunks, {len(full_response_text)} chars")
-        print(f"[{_ts()}][GEMINI] Full response: \"{full_response_text[:200]}\"")
+            async for chunk in gemini.generate_response(input_text):
+                if chunk["type"] == "text":
+                    text_piece = chunk["text"]
+                    full_response_text += text_piece
+                    gemini_chunk_count += 1
+                    print(f"[{_ts()}][GEMINI] Chunk #{gemini_chunk_count}: \"{text_piece}\"")
+                    await _send_json(ws, {"type": "guide_text", "text": text_piece}, closed)
+                    if tts_stream:
+                        await tts_stream.send_text(text_piece)
+
+                elif chunk["type"] == "function_call":
+                    print(f"[{_ts()}][GEMINI] Function call: {chunk['name']}")
+                    function_calls_this_round.append(chunk)
+                    await _handle_function_call(chunk, ws, gemini, world_labs, closed)
+
+            if not function_calls_this_round:
+                break  # Pure text response — done
+
+            # Function calls were made — call Gemini again for follow-up voice response
+            print(f"[{_ts()}][GEMINI] Round {round_num + 1}: {len(function_calls_this_round)} function call(s), continuing for follow-up...")
+            input_text = None  # No new user message — continue from function result
+
+        print(f"[{_ts()}][GEMINI] Response complete. {gemini_chunk_count} text chunks, {len(full_response_text)} chars")
 
         # Signal TTS that we're done sending text
         if tts_stream:

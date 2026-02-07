@@ -147,34 +147,27 @@ class GeminiGuide:
         )
 
     async def generate_response(
-        self, user_text: str
+        self, user_text: str | None = None
     ) -> AsyncGenerator[dict, None]:
         """Stream a response from Gemini. Yields dicts:
           {"type": "text", "text": "..."}
           {"type": "function_call", "name": "...", "args": {...}}
-        """
-        print(f"[GEMINI_GUIDE] === generate_response called ===")
-        print(f"[GEMINI_GUIDE] Input: \"{user_text}\"")
-        print(f"[GEMINI_GUIDE] History ({len(self.conversation_history)} entries):")
-        for i, entry in enumerate(self.conversation_history):
-            role = entry.role
-            parts_summary = []
-            for p in entry.parts:
-                if p.text:
-                    parts_summary.append(f"text:\"{p.text[:80]}\"")
-                elif p.function_call:
-                    parts_summary.append(f"fn_call:{p.function_call.name}")
-                elif p.function_response:
-                    parts_summary.append(f"fn_resp:{p.function_response.name}")
-            print(f"[GEMINI_GUIDE]   [{i}] {role}: {', '.join(parts_summary)}")
 
-        self.conversation_history.append(
-            types.Content(role="user", parts=[types.Part(text=user_text)])
-        )
+        If user_text is None, continues from the current history
+        (used after function call results are added).
+        """
+        if user_text is not None:
+            logger.info("generate_response: user_text=%r", user_text[:80] if len(user_text) > 80 else user_text)
+            self.conversation_history.append(
+                types.Content(role="user", parts=[types.Part(text=user_text)])
+            )
+        else:
+            logger.info("generate_response: continuation (no new user message)")
+
+        logger.debug("History: %d entries", len(self.conversation_history))
 
         config = self._build_config()
-        print(f"[GEMINI_GUIDE] System prompt: \"{self._system_prompt()[:150]}...\"")
-        print(f"[GEMINI_GUIDE] Calling gemini-2.5-flash with {len(self.conversation_history)} messages...")
+        logger.info("Calling gemini-2.5-flash with %d messages", len(self.conversation_history))
 
         response = self.client.models.generate_content_stream(
             model="gemini-2.5-flash",
@@ -201,7 +194,7 @@ class GeminiGuide:
                     full_text += part.text
                     yield {"type": "text", "text": part.text}
 
-        print(f"[GEMINI_GUIDE] Stream done. Total text: {len(full_text)} chars, {len(function_calls)} function calls")
+        logger.info("Stream done. %d text chars, %d function calls", len(full_text), len(function_calls))
 
         # Record model response in history (include both text and function calls)
         parts = []
@@ -215,7 +208,7 @@ class GeminiGuide:
         self.conversation_history.append(
             types.Content(role="model", parts=parts)
         )
-        print(f"[GEMINI_GUIDE] History now: {len(self.conversation_history)} entries")
+        logger.debug("History now: %d entries", len(self.conversation_history))
 
     def add_function_result(self, name: str, result: dict) -> None:
         """Add function execution result to conversation history."""
