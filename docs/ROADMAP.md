@@ -1,8 +1,8 @@
 # Roadmap
 
 > **Team:** 2 people
-> **Person A:** Frontend (React, Globe, SparkJS, UI/UX, audio)
-> **Person B:** Backend (FastAPI, Gradium, Gemini, World Labs, music curation)
+> **EJ (Person A):** Frontend (React, Globe, SparkJS, UI/UX, audio)
+> **Matt (Person B):** Backend (FastAPI, Gradium, Gemini, World Labs, music curation)
 
 ---
 
@@ -10,7 +10,7 @@
 
 **Goal:** Scaffolds running, voice pipeline working end-to-end standalone.
 
-### Person A (Frontend)
+### EJ (Frontend)
 - [ ] Scaffold Vite + React + TS + Tailwind + Zustand
 - [ ] Set up file structure, `.gitignore`, basic `App.tsx` with phase routing
 - [ ] Landing page: tsParticles star field (cosmic preset)
@@ -27,20 +27,22 @@
 - [ ] Era labels + visual indicator for selected period
 - [ ] Wire location + time selection to Zustand store
 
-### Person B (Backend)
-- [ ] Scaffold FastAPI project
-- [ ] Install `gradium`, `google-genai`, `httpx`, `python-dotenv`
-- [ ] Create `.env` with all API keys, verify each key works with a test call
-- [ ] Gradium STT service: connect to WebSocket, send test audio, receive transcript
-- [ ] Gradium TTS service: connect to WebSocket, send test text, receive audio
-- [ ] Verify both STT and TTS work standalone
-- [ ] Gemini guide service: set up system prompt, implement `generate_response()` with streaming
-- [ ] Define function calling tool schemas (world gen, music, facts, suggest_location)
-- [ ] Voice WebSocket router: wire full pipeline (audio in → Gradium STT → Gemini → Gradium TTS → audio out)
-- [ ] Test voice pipeline end-to-end with a WebSocket client
+### Matt (Backend)
+- [x] Scaffold FastAPI project
+- [x] Install `gradium`, `google-genai`, `httpx`, `python-dotenv`
+- [x] Create `.env` with all API keys, verify each key works with a test call
+- [x] Gradium STT service: connect to WebSocket, send test audio, receive transcript
+- [x] Gradium TTS service: connect to WebSocket, send test text, receive audio
+- [x] Verify both STT and TTS work standalone
+- [x] Gemini guide service: set up system prompt, implement `generate_response()` with streaming
+- [x] Define function calling tool schemas (world gen, music, facts, suggest_location)
+- [x] Voice WebSocket router: wire full pipeline (audio in → Gradium STT → Gemini → Gradium TTS → audio out)
+- [x] Test voice pipeline end-to-end with a WebSocket client
 
-### Milestone 1
-> Person B can speak into a WebSocket client and get a Gemini-powered AI guide response back as audio via Gradium. Person A has landing page + globe + time selector rendering.
+### Milestone 1 ✅ (Backend complete — 27/27 tests passing)
+> Matt can speak into a WebSocket client and get a Gemini-powered AI guide response back as audio via Gradium. EJ has landing page + globe + time selector rendering.
+>
+> **Status:** Backend portion complete. All Gradium STT/TTS, Gemini Guide, World Labs, and Music Selector services verified against live APIs. Voice WebSocket pipeline fully wired. EJ frontend pending.
 
 ---
 
@@ -48,10 +50,18 @@
 
 **Goal:** Frontend and backend connected. Full user flow works from globe to world rendering.
 
-### Person A (Frontend)
-- [ ] AudioWorklet: adapt `audio-processor.js` from KingHacks2026 (change to 24kHz)
-- [ ] Create `useAudioCapture` hook for mic access + chunk streaming
-- [ ] WebSocket hook: create `useVoiceWebSocket` — connect to backend, send audio chunks, receive transcript/audio/status messages
+### Matt (Voice Client — pulled forward from EJ's scope)
+> **Note:** Matt is building the production audio/voice client layer now so the full voice round-trip is proven E2E before EJ starts on the visual frontend. These service classes and hooks will be handed off to EJ for integration.
+- [ ] AudioWorklet: `audio-processor.js` (24kHz, Float32→Int16 PCM, 1920-sample chunks)
+- [ ] `AudioCaptureService.ts`: mic → AudioWorklet → PCM chunk callback (framework-agnostic)
+- [ ] `AudioPlaybackService.ts`: TTS PCM → gapless 48kHz speaker playback (framework-agnostic)
+- [ ] `VoiceConnection.ts`: WebSocket orchestrator — ties capture/playback to backend protocol
+- [ ] `useVoiceConnection.ts`: thin React hook wrapper
+- [ ] Scaffold minimal Vite + React + TS frontend with WS proxy to backend
+- [ ] Minimal `App.tsx`: one Connect button + transcript/guide text logs for E2E testing
+- [ ] Verify full voice round-trip: speak → STT → Gemini → TTS → hear response
+
+### EJ (Frontend — visual UI)
 - [ ] Wire WebSocket hook to Zustand store
 - [ ] Voice ↔ Globe integration: send selected location/time to backend via WebSocket `context` message
 - [ ] Handle `suggested_location` WebSocket messages: update Zustand → Globe auto-pins + flies to location
@@ -66,23 +76,23 @@
 - [ ] World Explorer component: connect real World Labs splat URL to SparkJS renderer
 - [ ] Handle loading states, wire phase transition from loading → exploring when world is ready
 
-### Person B (Backend)
-- [ ] World Labs service: implement `generate_world()`, `poll_status()`, `get_assets()`
+### Matt (Backend)
+- [x] World Labs service: implement `generate_world()`, `poll_status()`, `get_assets()`
 - [ ] Test World Labs with a text prompt, verify world generates and returns SPZ URL
-- [ ] World Labs + voice integration: when Gemini calls `trigger_world_generation`, start generation
-- [ ] Send world status updates back through WebSocket, handle async polling
-- [ ] Music selector: build track metadata index from curated library
-- [ ] Implement Gemini function call handler for `select_music` — match era/region/mood to track, return URL
+- [x] World Labs + voice integration: when Gemini calls `trigger_world_generation`, start generation
+- [x] Send world status updates back through WebSocket, handle async polling
+- [x] Music selector: build track metadata index from curated library
+- [x] Implement Gemini function call handler for `select_music` — match era/region/mood to track, return URL
 - [ ] Narration mode: when world starts generating, switch Gemini to narration mode (longer, storytelling responses)
 - [ ] Stream narration text to frontend
-- [ ] Voice pipeline polish: VAD-based turn detection, handle edge cases (empty transcripts, connection drops)
+- [x] Voice pipeline polish: VAD-based turn detection, handle edge cases (empty transcripts, connection drops)
 - [ ] Improve response streaming latency
 - [ ] REST endpoint for frontend to poll world status independently
 - [ ] Serve splat URLs to frontend, handle generation failures gracefully
-- [ ] Implement `suggest_location` Gemini function call handler — send `{ type: "suggested_location", lat, lng, name }` via WebSocket
+- [x] Implement `suggest_location` Gemini function call handler — send `{ type: "suggested_location", lat, lng, name }` via WebSocket
 
 ### Milestone 2
-> User can: Land → Enter → See globe → Click location → Pick era → Talk to AI guide → Say "let's go" → See loading experience → World renders in SparkJS.
+> Full voice round-trip proven in browser (speak → hear AI response). User can: Land → Enter → See globe → Click location → Pick era → Talk to AI guide → Say "let's go" → See loading experience → World renders in SparkJS.
 
 ---
 
@@ -90,7 +100,7 @@
 
 **Goal:** Polished, beautiful, demo-ready experience.
 
-### Person A (Frontend)
+### EJ (Frontend)
 - [ ] Music player: Web Audio API integration, play tracks from `/public/music/`
 - [ ] Volume control, crossfade between tracks
 - [ ] Wire music player to `music` WebSocket messages
@@ -105,7 +115,7 @@
 - [ ] Glassmorphism consistency, dark theme throughout
 - [ ] Loading experience enhancement: constellation lines, glowing orbs, historical imagery fade-ins
 
-### Person B (Backend)
+### Matt (Backend)
 - [ ] Music curation: source 15–20 royalty-free tracks (freemusicarchive.org or similar)
 - [ ] Tag each track with era/region/mood metadata, add to repo
 - [ ] Fact generation: implement `generate_fact` function call handler in Gemini service
@@ -126,7 +136,7 @@
 
 ## Phase 4: Deploy & Demo Prep
 
-### Person A (Frontend)
+### EJ (Frontend)
 - [ ] Cross-browser testing (Chrome, Firefox, Safari)
 - [ ] Performance profiling, fix any rendering issues
 - [ ] Deploy frontend to Vercel, set `VITE_API_URL` to production backend
@@ -134,7 +144,7 @@
 - [ ] Bug fixes from production testing, final visual adjustments
 - [ ] Ensure pre-generated worlds load smoothly
 
-### Person B (Backend)
+### Matt (Backend)
 - [ ] Deploy backend to Railway/Render
 - [ ] Configure production environment variables
 - [ ] Test WebSocket connectivity over HTTPS

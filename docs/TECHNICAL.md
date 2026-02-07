@@ -273,16 +273,20 @@ async def voice_ws(websocket: WebSocket):
     "input_format": "pcm",
     "language": "en"
 }
+# IMPORTANT: After sending setup, wait for ready before sending audio:
+# Ready:     { "type": "ready", "request_id": "...", "model_name": "default", "sample_rate": 24000, "frame_size": 1920 }
+#
 # Audio input: PCM 24kHz, 16-bit signed int, mono
 # Audio chunks must be base64-encoded in JSON: { "type": "audio", "audio": "<base64>" }
 # Recommended chunk size: 1920 samples (80ms at 24kHz)
 #
-# Server returns two message types:
+# Server returns three message types:
 #
+# Ready:     { "type": "ready", "request_id": "...", ... }  (sent once after setup)
 # Transcript: { "type": "text", "text": "...", "start_s": 0.5, "end_s": 2.3 }
-# VAD:        { "type": "step", "vad": [timestamp, duration, {"inactivity_prob": 0.95}] }
+# VAD:        { "type": "step", "vad": [{"horizon_s": 0.5, "inactivity_prob": 0.05}, {"horizon_s": 1.0, "inactivity_prob": 0.08}, ...] }
 #
-# Turn detection: trigger when vad[2]["inactivity_prob"] > 0.5
+# Turn detection: check max inactivity_prob across all horizons; trigger when > 0.5
 ```
 
 **Python SDK (recommended over raw WebSocket):**
@@ -312,12 +316,14 @@ response = client.models.generate_content_stream(
     contents=conversation_history,
     config={
         "system_instruction": GUIDE_SYSTEM_PROMPT,
+        # NOTE: google_search CANNOT be combined with function_declarations
+        # in a single request for gemini-2.5-flash (causes 400 error).
+        # Use function tools only; add google_search in a separate call if needed.
         "tools": [
             trigger_world_generation,
             select_music,
             generate_fact,
-            suggest_location,
-            google_search
+            suggest_location
         ]
     }
 )
@@ -341,9 +347,14 @@ response = client.models.generate_content_stream(
 # output_format options: "wav", "pcm", "opus", "pcm_8000", "pcm_16000", "pcm_24000",
 #                        "ulaw_8000", "alaw_8000"
 #
-# Send text: { "type": "text", "text": "Hello world" }  (can stream incrementally)
-# Receive: binary PCM audio chunks (48kHz, 16-bit, mono, 3840 samples per chunk = 80ms)
-# Latency: <300ms time-to-first-token
+# IMPORTANT: After sending setup, wait for ready before sending text:
+# Ready:     { "type": "ready", "request_id": "..." }
+#
+# Send text:   { "type": "text", "text": "Hello world" }  (can stream incrementally)
+# Receive:     { "type": "audio", "audio": "<base64-encoded PCM>" }  (48kHz, 16-bit, mono, 3840 samples per chunk = 80ms)
+# End signal:  { "type": "end_of_stream" }  (client sends to finish; server sends after final audio)
+# Timestamps:  { "type": "text", "text": "Hello", "start_s": 0.2, "stop_s": 0.6 }  (word-level timing)
+# Latency: <300ms time-to-first-audio
 ```
 
 **Python SDK (recommended over raw WebSocket):**
