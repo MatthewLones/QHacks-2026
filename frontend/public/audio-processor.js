@@ -14,7 +14,7 @@
 
 const TARGET_RATE = 24000;
 const CHUNK_SAMPLES = 1920; // 80ms at 24kHz
-const VOICE_THRESHOLD = 0.015; // RMS threshold for voice activity
+const VOICE_THRESHOLD = 0.04; // RMS threshold for voice activity (raised to ignore ambient noise)
 const VOICE_COOLDOWN_MS = 300; // Don't re-fire within this window
 
 class AudioCaptureProcessor extends AudioWorkletProcessor {

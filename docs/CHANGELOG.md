@@ -18,6 +18,40 @@ Each entry includes what changed, why it was changed, and which files were affec
 
 ---
 
+## [Session 11] - 2026-02-07
+
+### Added
+- **Two-phase conversation system with Phase 1 globe selection prompt** — Created `PHASE1_GLOBE_PROMPT`: warm, inspirational, "annals of history" tone. AI welcomes the user, suggests locations via `suggest_location` tool, learns about them, and does NOT use facts/world gen/music tools. Phase-aware `_build_config()` selects prompt + tools based on `self.context["phase"]`. Extracted shared `TTS_RULES` constant.
+  - `backend/services/gemini_guide.py` — New `PHASE1_GLOBE_PROMPT`, `_build_phase1_tools()`, `_build_exploration_tools()`, `_SUGGEST_LOCATION`, `_SUMMARIZE_SESSION` declarations, phase-aware `_build_config()`
+
+- **`summarize_session` Gemini tool** — New function call that captures user profile (name, interests, preferences) and a rich vivid scene description for World Labs 3D generation. Called by Gemini when user confirms exploration.
+  - `backend/services/gemini_guide.py` — Tool declaration
+  - `backend/routers/voice.py` — Handler sends `session_summary` message to frontend
+
+- **`session_start` and `confirm_exploration` WebSocket messages** — Frontend sends `session_start` (with timePeriod) after voice connects to trigger AI welcome. Sends `confirm_exploration` when user presses Enter button to trigger AI goodbye + summarize_session call.
+  - `backend/routers/voice.py` — Two new handlers in main WebSocket loop
+
+- **Voice ↔ Globe integration** — Auto-start voice when globe phase begins. Send session_start to trigger AI welcome. Sync location/time context to backend on changes. Handle confirm exploration flow (EnterLocation → AI goodbye → session summary → phase transition to loading).
+  - `frontend/src/App.tsx` — Voice lifecycle orchestration with useEffect hooks
+  - `frontend/src/hooks/useVoiceConnection.ts` — Expanded to wire events to Zustand store and expose new methods
+  - `frontend/src/audio/VoiceConnection.ts` — Added `sessionSummary`, `responseStart` events, `sendSessionStart()`, `sendConfirmExploration()` methods
+
+- **GuideSubtitle component** — Glassmorphic floating subtitle overlay showing AI speech text in real-time. Text streams in as chunks arrive, clears when a new response starts.
+  - `frontend/src/components/GuideSubtitle.tsx` — New component
+
+- **Vite WebSocket proxy** — Added `/ws` proxy to Vite dev server config routing to backend at `localhost:8000`.
+  - `frontend/vite.config.ts`
+
+### Changed
+- **Frontend store expanded** — Added `userProfile`, `worldDescription`, `setSessionSummary`, `guideSubtitle`, `setGuideSubtitle`, `clearGuideSubtitle`, `confirmExplorationRequested`, `requestConfirmExploration`, `clearConfirmExploration` fields for voice integration.
+  - `frontend/src/store.ts`
+- **EnterLocation button wired** — Button now calls `requestConfirmExploration` store action on click, triggering the AI goodbye flow.
+  - `frontend/src/components/EnterLocation.tsx`
+- **Roadmap updated** — Checked off voice client, merge, and integration tasks in Phase 2.
+  - `docs/ROADMAP.md`
+
+---
+
 ## [Session 10] - 2026-02-07
 
 ### Fixed

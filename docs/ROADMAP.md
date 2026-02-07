@@ -52,21 +52,27 @@
 
 ### Matt (Voice Client — pulled forward from EJ's scope)
 > **Note:** Matt is building the production audio/voice client layer now so the full voice round-trip is proven E2E before EJ starts on the visual frontend. These service classes and hooks will be handed off to EJ for integration.
-- [ ] AudioWorklet: `audio-processor.js` (24kHz, Float32→Int16 PCM, 1920-sample chunks)
-- [ ] `AudioCaptureService.ts`: mic → AudioWorklet → PCM chunk callback (framework-agnostic)
-- [ ] `AudioPlaybackService.ts`: TTS PCM → gapless 48kHz speaker playback (framework-agnostic)
-- [ ] `VoiceConnection.ts`: WebSocket orchestrator — ties capture/playback to backend protocol
-- [ ] `useVoiceConnection.ts`: thin React hook wrapper
-- [ ] Scaffold minimal Vite + React + TS frontend with WS proxy to backend
-- [ ] Minimal `App.tsx`: one Connect button + transcript/guide text logs for E2E testing
-- [ ] Verify full voice round-trip: speak → STT → Gemini → TTS → hear response
+- [x] AudioWorklet: `audio-processor.js` (24kHz, Float32→Int16 PCM, 1920-sample chunks)
+- [x] `AudioCaptureService.ts`: mic → AudioWorklet → PCM chunk callback (framework-agnostic)
+- [x] `AudioPlaybackService.ts`: TTS PCM → gapless 48kHz speaker playback (framework-agnostic)
+- [x] `VoiceConnection.ts`: WebSocket orchestrator — ties capture/playback to backend protocol
+- [x] `useVoiceConnection.ts`: thin React hook wrapper
+- [x] Scaffold minimal Vite + React + TS frontend with WS proxy to backend
+- [x] Minimal `App.tsx`: one Connect button + transcript/guide text logs for E2E testing
+- [x] Verify full voice round-trip: speak → STT → Gemini → TTS → hear response
 
-### EJ (Frontend — visual UI)
-- [ ] Wire WebSocket hook to Zustand store
-- [ ] Voice ↔ Globe integration: send selected location/time to backend via WebSocket `context` message
-- [ ] Handle `suggested_location` WebSocket messages: update Zustand → Globe auto-pins + flies to location
+### Matt + EJ (Voice ↔ Frontend Integration)
+- [x] Merge `backend-matt` + `frontend-ej` into `development` branch
+- [x] Wire WebSocket hook to Zustand store (suggestedLocation, sessionSummary, guideText → store)
+- [x] Voice ↔ Globe integration: send selected location/time to backend via WebSocket `context` message
+- [x] Handle `suggested_location` WebSocket messages: update Zustand → Globe auto-pins + flies to location
+- [x] Auto-start voice on globe phase, trigger AI welcome via `session_start`
+- [x] Phase 1 system prompt: warm, inspirational welcome + location suggestions (no facts/world gen)
+- [x] `summarize_session` tool: capture user profile + world description on confirm
+- [x] EnterLocation button → `confirm_exploration` → AI goodbye → session summary → phase transition
+- [x] GuideSubtitle component: glassmorphic live subtitle overlay
+- [x] Show transcript + guide text in UI
 - [ ] Globe WebGL context cleanup on phase transition (dispose renderer before SparkJS takes over)
-- [ ] Show transcript + guide text in UI
 - [ ] Add mic button toggle
 - [ ] Loading experience: transition animation (fade + particles)
 - [ ] Show AI narration text with typewriter effect

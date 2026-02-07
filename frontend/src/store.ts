@@ -52,6 +52,24 @@ interface AppState {
 
   facts: Array<{ text: string; category: string; visible: boolean }>;
   addFact: (f: { text: string; category: string }) => void;
+
+  // Session summary from Phase 1 voice conversation
+  userProfile: string | null;
+  worldDescription: string | null;
+  setSessionSummary: (userProfile: string, worldDescription: string) => void;
+
+  // Guide subtitle (word-by-word reveal synced to TTS word timestamps)
+  guideSubtitle: string;
+  _wordTimestamps: Array<{ text: string; startS: number; stopS: number }>;
+  _subtitleAudioStart: number;
+  addWordTimestamp: (text: string, startS: number, stopS: number) => void;
+  markSubtitleAudioStart: () => void;
+  clearGuideSubtitle: () => void;
+
+  // Confirm exploration flow
+  confirmExplorationRequested: boolean;
+  requestConfirmExploration: () => void;
+  clearConfirmExploration: () => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -93,4 +111,22 @@ export const useAppStore = create<AppState>((set) => ({
   facts: [],
   addFact: (f) =>
     set((s) => ({ facts: [...s.facts, { ...f, visible: true }] })),
+
+  userProfile: null,
+  worldDescription: null,
+  setSessionSummary: (userProfile, worldDescription) => set({ userProfile, worldDescription }),
+
+  guideSubtitle: '',
+  _wordTimestamps: [],
+  _subtitleAudioStart: 0,
+  addWordTimestamp: (text, startS, stopS) =>
+    set((s) => ({
+      _wordTimestamps: [...s._wordTimestamps, { text, startS, stopS }],
+    })),
+  markSubtitleAudioStart: () => set({ _subtitleAudioStart: performance.now() }),
+  clearGuideSubtitle: () => set({ guideSubtitle: '', _wordTimestamps: [], _subtitleAudioStart: 0 }),
+
+  confirmExplorationRequested: false,
+  requestConfirmExploration: () => set({ confirmExplorationRequested: true }),
+  clearConfirmExploration: () => set({ confirmExplorationRequested: false }),
 }));

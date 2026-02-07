@@ -23,6 +23,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from config import GRADIUM_API_KEY, GEMINI_API_KEY, WORLD_LABS_API_KEY
 from services.gradium_service import GradiumService
+from google.genai import types
 from services.gemini_guide import GeminiGuide
 from services.world_labs import WorldLabsService
 from services.music_selector import select_track
@@ -129,13 +130,25 @@ async def _handle_function_call(
         gemini.add_function_result(name, {"status": "displayed"})
 
     elif name == "suggest_location":
-        await _send_json(ws, {
+        loc_msg: dict = {
             "type": "suggested_location",
             "lat": args["lat"],
             "lng": args["lng"],
             "name": args["name"],
-        }, closed)
+        }
+        if "year" in args:
+            loc_msg["year"] = args["year"]
+        await _send_json(ws, loc_msg, closed)
         gemini.add_function_result(name, {"status": "location_suggested"})
+
+    elif name == "summarize_session":
+        print(f"[{_ts()}][FUNC] Session summary generated")
+        await _send_json(ws, {
+            "type": "session_summary",
+            "userProfile": args["user_profile"],
+            "worldDescription": args["world_description"],
+        }, closed)
+        gemini.add_function_result(name, {"status": "session_saved"})
 
     else:
         print(f"[{_ts()}][FUNC] Unknown function call: {name}")
@@ -212,12 +225,21 @@ async def _process_gemini_response(
 
             async def forward_tts_audio():
                 nonlocal tts_chunk_count
-                async for audio_chunk in tts_stream.iter_audio():
-                    tts_chunk_count += 1
-                    encoded = base64.b64encode(audio_chunk).decode("ascii")
-                    if tts_chunk_count <= 3 or tts_chunk_count % 20 == 0:
-                        print(f"[{_ts()}][TTS→FE] Audio chunk #{tts_chunk_count}: {len(audio_chunk)} bytes")
-                    await _send_json(ws, {"type": "audio", "data": encoded, "responseId": response_id}, closed)
+                async for msg_type, payload in tts_stream.iter_audio():
+                    if msg_type == "audio":
+                        tts_chunk_count += 1
+                        encoded = base64.b64encode(payload).decode("ascii")
+                        if tts_chunk_count <= 3 or tts_chunk_count % 20 == 0:
+                            print(f"[{_ts()}][TTS→FE] Audio chunk #{tts_chunk_count}: {len(payload)} bytes")
+                        await _send_json(ws, {"type": "audio", "data": encoded, "responseId": response_id}, closed)
+                    elif msg_type == "timestamp":
+                        await _send_json(ws, {
+                            "type": "word_timestamp",
+                            "text": payload["text"],
+                            "startS": payload["start_s"],
+                            "stopS": payload["stop_s"],
+                            "responseId": response_id,
+                        }, closed)
                 print(f"[{_ts()}][TTS] Audio stream ended. Total chunks: {tts_chunk_count}")
 
             tts_recv_task = asyncio.create_task(forward_tts_audio())
@@ -479,6 +501,53 @@ async def voice_ws(websocket: WebSocket):
             elif msg_type == "phase":
                 print(f"[{_ts()}][FE→BE] Phase update: {msg.get('phase')}")
                 gemini.update_context(phase=msg.get("phase", "globe_selection"))
+
+            elif msg_type == "session_start":
+                # Frontend signals voice session should begin — send AI welcome
+                time_period = msg.get("timePeriod", {})
+                print(f"[{_ts()}][FE→BE] Session start: timePeriod={time_period}")
+                gemini.update_context(
+                    time_period=time_period.get("label", ""),
+                    year=time_period.get("year", ""),
+                    phase="globe_selection",
+                )
+                # Seed conversation with a synthetic user greeting
+                gemini.conversation_history.append(
+                    types.Content(role="user", parts=[types.Part(text="Hello! I just arrived.")])
+                )
+                current_response = asyncio.create_task(
+                    _process_gemini_response(
+                        None, websocket, gemini, gradium, world_labs, ws_closed
+                    )
+                )
+
+            elif msg_type == "confirm_exploration":
+                # User pressed "Enter" — trigger AI goodbye + session summary
+                print(f"[{_ts()}][FE→BE] User confirmed exploration")
+                if current_response and not current_response.done():
+                    current_response.cancel()
+                    try:
+                        await current_response
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                # Inject system instruction telling Gemini to say goodbye
+                gemini.conversation_history.append(
+                    types.Content(
+                        role="user",
+                        parts=[types.Part(text=(
+                            "[System: The user has pressed the Enter button to confirm they want "
+                            "to explore this location. Say a warm, heartfelt goodbye, wish them "
+                            "an incredible journey, and then call summarize_session with your "
+                            "summary of the user and a rich visual description of their chosen "
+                            "destination for 3D world generation.]"
+                        ))]
+                    )
+                )
+                current_response = asyncio.create_task(
+                    _process_gemini_response(
+                        None, websocket, gemini, gradium, world_labs, ws_closed
+                    )
+                )
 
             else:
                 print(f"[{_ts()}][FE→BE] Unknown message type: {msg_type}")

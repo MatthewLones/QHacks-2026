@@ -75,20 +75,31 @@ class GradiumTTSStream:
         except (websockets.ConnectionClosed, json.JSONDecodeError):
             return None
 
-    async def iter_audio(self) -> AsyncGenerator[bytes, None]:
-        """Iterate over all audio chunks until the connection closes."""
+    async def iter_audio(self) -> AsyncGenerator[tuple[str, bytes | dict], None]:
+        """Iterate over audio chunks and word timestamps until close.
+
+        Yields:
+            ("audio", pcm_bytes) for audio data
+            ("timestamp", {"text": str, "start_s": float, "stop_s": float}) for word timing
+        """
         while True:
             try:
                 data = await self._ws.recv()
                 if isinstance(data, str):
                     msg = json.loads(data)
                     if msg.get("type") == "audio" and msg.get("audio"):
-                        yield base64.b64decode(msg["audio"])
+                        yield ("audio", base64.b64decode(msg["audio"]))
+                    elif msg.get("type") == "text" and "start_s" in msg:
+                        yield ("timestamp", {
+                            "text": msg["text"],
+                            "start_s": msg["start_s"],
+                            "stop_s": msg["stop_s"],
+                        })
                     elif msg.get("type") == "end_of_stream":
                         break
                 elif isinstance(data, bytes):
                     # Fallback: some formats may send raw binary
-                    yield data
+                    yield ("audio", data)
             except (websockets.ConnectionClosed, json.JSONDecodeError):
                 break
 
@@ -148,12 +159,13 @@ class GradiumService:
     async def tts_synthesize(
         self, text: str, voice_id: str = DEFAULT_VOICE_ID
     ) -> AsyncGenerator[bytes, None]:
-        """Convenience: synthesize text and yield audio chunks."""
+        """Convenience: synthesize text and yield audio chunks (timestamps discarded)."""
         stream = await self.create_tts_stream(voice_id)
         try:
             await stream.send_text(text)
             await stream.send_flush()
-            async for chunk in stream.iter_audio():
-                yield chunk
+            async for msg_type, payload in stream.iter_audio():
+                if msg_type == "audio":
+                    yield payload  # type: ignore[misc]
         finally:
             await stream.close()

@@ -28,7 +28,11 @@ export type VoiceEventMap = {
     splatUrl?: string,
   ) => void;
   music: (trackUrl: string) => void;
-  suggestedLocation: (lat: number, lng: number, name: string) => void;
+  suggestedLocation: (lat: number, lng: number, name: string, year?: number) => void;
+  sessionSummary: (userProfile: string, worldDescription: string) => void;
+  wordTimestamp: (text: string, startS: number, stopS: number) => void;
+  audioPlaybackStart: () => void;
+  responseStart: () => void;
   status: (status: ConnectionStatus) => void;
 };
 
@@ -46,6 +50,8 @@ export class VoiceConnection {
   /** Tracks the active backend response — audio from other responses is dropped. */
   private activeResponseId: string | null = null;
   private droppedAudioCount = 0;
+  /** True until first audio chunk plays for current response (for subtitle sync). */
+  private firstAudioForResponse = true;
 
   get status(): ConnectionStatus {
     return this._status;
@@ -92,6 +98,8 @@ export class VoiceConnection {
               this.playback.interrupt();
               this.activeResponseId = null; // Reject stale audio still in-flight
               this.send({ type: "interrupt" });
+              // Clear subtitles immediately so old words stop appearing
+              this.emit("responseStart");
             }
           },
         );
@@ -154,6 +162,16 @@ export class VoiceConnection {
     this.send({ type: "phase", phase });
   }
 
+  sendSessionStart(timePeriod: { label: string; year: number }): void {
+    console.log("[VC→BE] sendSessionStart:", { timePeriod });
+    this.send({ type: "session_start", timePeriod });
+  }
+
+  sendConfirmExploration(): void {
+    console.log("[VC→BE] sendConfirmExploration");
+    this.send({ type: "confirm_exploration" });
+  }
+
   on<K extends keyof VoiceEventMap>(
     event: K,
     listener: VoiceEventMap[K],
@@ -209,9 +227,11 @@ export class VoiceConnection {
         // New response starting — update active ID and clear any leftover playback
         this.activeResponseId = msg.responseId as string;
         this.droppedAudioCount = 0;
+        this.firstAudioForResponse = true;
         console.log(
           `[BE→VC] #${msgCount} RESPONSE_START: ${this.activeResponseId}`,
         );
+        this.emit("responseStart");
         break;
 
       case "transcript":
@@ -238,6 +258,10 @@ export class VoiceConnection {
           );
         }
         this.playback.playChunk(pcm);
+        if (this.firstAudioForResponse) {
+          this.firstAudioForResponse = false;
+          this.emit("audioPlaybackStart");
+        }
         break;
       }
 
@@ -278,15 +302,38 @@ export class VoiceConnection {
 
       case "suggested_location":
         console.log(
-          `[BE→VC] #${msgCount} SUGGESTED_LOCATION: ${msg.name} (${msg.lat}, ${msg.lng})`,
+          `[BE→VC] #${msgCount} SUGGESTED_LOCATION: ${msg.name} (${msg.lat}, ${msg.lng})${msg.year != null ? ` year=${msg.year}` : ""}`,
         );
         this.emit(
           "suggestedLocation",
           msg.lat as number,
           msg.lng as number,
           msg.name as string,
+          msg.year as number | undefined,
         );
         break;
+
+      case "session_summary":
+        console.log(
+          `[BE→VC] #${msgCount} SESSION_SUMMARY received`,
+        );
+        this.emit(
+          "sessionSummary",
+          msg.userProfile as string,
+          msg.worldDescription as string,
+        );
+        break;
+
+      case "word_timestamp": {
+        if (msg.responseId && msg.responseId !== this.activeResponseId) break;
+        this.emit(
+          "wordTimestamp",
+          msg.text as string,
+          msg.startS as number,
+          msg.stopS as number,
+        );
+        break;
+      }
 
       case "interrupt":
         console.log(
