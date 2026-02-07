@@ -23,7 +23,7 @@ def test_music_selector_exact_match():
     """Music selector returns best match for era/region/mood."""
     track = select_track(era="ancient", region="europe", mood="majestic")
     assert track is not None
-    assert track["id"] == "ancient-rome-majestic"
+    assert track["id"] == "ancient-mediterranean"
     print(f"\n  Selected track: {track['title']}")
 
 

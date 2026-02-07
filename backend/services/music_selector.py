@@ -12,25 +12,62 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Placeholder library — will be populated with real tracks in Phase 3
 MUSIC_LIBRARY: list[dict] = [
     {
-        "id": "ancient-rome-majestic",
-        "title": "Glory of the Forum",
-        "file": "/music/ancient-rome-majestic.mp3",
+        "id": "ancient-mediterranean",
+        "title": "Echoes of Antiquity",
+        "file": "/music/ancient-mediterranean.mp3",
         "era": "ancient",
         "region": "europe",
         "mood": "majestic",
-        "attribution": "Placeholder — replace with real CC track",
     },
     {
-        "id": "medieval-europe-contemplative",
+        "id": "ancient-egypt",
+        "title": "Sands of Time",
+        "file": "/music/ancient-egypt.mp3",
+        "era": "ancient",
+        "region": "middle_east",
+        "mood": "contemplative",
+    },
+    {
+        "id": "medieval-europe",
         "title": "Stone Corridors",
-        "file": "/music/medieval-europe-contemplative.mp3",
+        "file": "/music/medieval-europe.mp3",
         "era": "medieval",
         "region": "europe",
         "mood": "contemplative",
-        "attribution": "Placeholder — replace with real CC track",
+    },
+    {
+        "id": "renaissance",
+        "title": "Age of Discovery",
+        "file": "/music/renaissance.mp3",
+        "era": "renaissance",
+        "region": "europe",
+        "mood": "majestic",
+    },
+    {
+        "id": "east-asian",
+        "title": "Eastern Winds",
+        "file": "/music/east-asian.mp3",
+        "era": "ancient",
+        "region": "asia",
+        "mood": "peaceful",
+    },
+    {
+        "id": "modern-cinematic",
+        "title": "New Horizons",
+        "file": "/music/modern-cinematic.mp3",
+        "era": "modern",
+        "region": "global",
+        "mood": "adventurous",
+    },
+    {
+        "id": "dramatic-epic",
+        "title": "The Grand March",
+        "file": "/music/dramatic-epic.mp3",
+        "era": "classical",
+        "region": "global",
+        "mood": "dramatic",
     },
 ]
 

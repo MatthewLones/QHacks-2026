@@ -12,6 +12,7 @@ import {
 } from "../audio/VoiceConnection";
 import { useAppStore } from "../store";
 import { useSelectionStore } from "../selectionStore";
+import { musicService } from "../audio/MusicService";
 
 export interface VoiceState {
   status: ConnectionStatus;
@@ -79,6 +80,18 @@ export function useVoiceConnection(): VoiceState {
         useAppStore.getState().setSessionSummary(userProfile, worldDescription);
       },
     );
+
+    // Mic level for waveform visualization (~20Hz updates)
+    vc.on("micLevel", (rms: number) => {
+      useAppStore.getState().setMicLevel(rms);
+    });
+
+    // Era-specific music from backend — crossfade from ambient to era track
+    vc.on("music", (trackUrl: string) => {
+      useAppStore.getState().setCurrentTrack(trackUrl);
+      useAppStore.getState().setMusicPlaying(true);
+      musicService.crossfadeTo(trackUrl, 2000);
+    });
 
     return () => {
       vc.disconnect();

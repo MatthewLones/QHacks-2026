@@ -7,10 +7,12 @@ import TimeWheelSelector from './components/TimeWheelSelector';
 import TravelTo from './components/TravelTo';
 import Starfield from './components/Starfield';
 import GuideSubtitle from './components/GuideSubtitle';
+import UserSpeakingIndicator from './components/UserSpeakingIndicator';
 import LandingWarp from './components/landing/LandingWarp';
 import { useAppStore } from './store';
 import { useSelectionStore } from './selectionStore';
 import { useVoiceConnection } from './hooks/useVoiceConnection';
+import { musicService } from './audio/MusicService';
 
 function App() {
   const phase = useAppStore((s) => s.phase);
@@ -87,6 +89,20 @@ function App() {
     }
   }, [confirmRequested, voice.status, voice.sendConfirmExploration, clearConfirm]);
 
+  // Start ambient music when globe phase begins
+  useEffect(() => {
+    if (phase === 'globe') {
+      musicService.play('/music/ambient-globe.mp3', { loop: true, fadeInMs: 3000 });
+    }
+  }, [phase]);
+
+  // Stop music when leaving globe/loading phases
+  useEffect(() => {
+    if (phase !== 'globe' && phase !== 'loading') {
+      musicService.stop(2000);
+    }
+  }, [phase]);
+
   // When session summary arrives, wait for goodbye audio then transition
   useEffect(() => {
     if (userProfile && phase === 'globe') {
@@ -119,6 +135,7 @@ function App() {
               <TravelTo />
               <LocationCard />
               <GuideSubtitle />
+              <UserSpeakingIndicator />
             </>
           )}
         </>

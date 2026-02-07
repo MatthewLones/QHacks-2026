@@ -6,8 +6,9 @@
  * downsamples to 24kHz via linear interpolation, converts to Int16 PCM,
  * and posts 1920-sample chunks (80ms at 24kHz = 3840 bytes) to main thread.
  *
- * Also computes RMS energy per process() call and posts voice activity events
- * for instant barge-in detection (much faster than waiting for STT).
+ * Also computes RMS energy per process() call and posts:
+ *   - voice_activity events for barge-in detection
+ *   - mic_level events at ~20Hz for waveform visualization
  *
  * Gradium STT expects: PCM 24kHz, 16-bit signed int, mono.
  */
@@ -16,6 +17,7 @@ const TARGET_RATE = 24000;
 const CHUNK_SAMPLES = 1920; // 80ms at 24kHz
 const VOICE_THRESHOLD = 0.04; // RMS threshold for voice activity (raised to ignore ambient noise)
 const VOICE_COOLDOWN_MS = 300; // Don't re-fire within this window
+const MIC_LEVEL_INTERVAL_MS = 50; // Send mic level at ~20Hz for waveform visualization
 
 class AudioCaptureProcessor extends AudioWorkletProcessor {
   constructor() {
@@ -27,6 +29,7 @@ class AudioCaptureProcessor extends AudioWorkletProcessor {
     this._ratio = sampleRate / TARGET_RATE;
     this._resamplePos = 0; // fractional position in input stream
     this._lastVoiceNotify = 0; // timestamp of last voice_activity post
+    this._lastLevelNotify = 0; // timestamp of last mic_level post
 
     this.port.onmessage = (event) => {
       if (event.data && event.data.command === "stop") {
@@ -56,6 +59,15 @@ class AudioCaptureProcessor extends AudioWorkletProcessor {
       if (now - this._lastVoiceNotify > VOICE_COOLDOWN_MS) {
         this._lastVoiceNotify = now;
         this.port.postMessage({ type: "voice_activity", rms });
+      }
+    }
+
+    // Send mic level at ~20Hz for waveform visualization
+    {
+      const now = currentTime * 1000;
+      if (now - this._lastLevelNotify > MIC_LEVEL_INTERVAL_MS) {
+        this._lastLevelNotify = now;
+        this.port.postMessage({ type: "mic_level", rms });
       }
     }
 

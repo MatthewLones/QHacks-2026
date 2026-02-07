@@ -18,10 +18,12 @@ export class AudioCaptureService {
    * Request mic permission, start capture, and call onChunk for each PCM chunk.
    * @param onChunk Called with raw Int16 PCM ArrayBuffer (3840 bytes = 1920 samples @ 24kHz)
    * @param onVoiceActivity Called when the AudioWorklet detects voice energy above threshold
+   * @param onMicLevel Called at ~20Hz with current RMS level for waveform visualization
    */
   async start(
     onChunk: (pcmBytes: ArrayBuffer) => void,
     onVoiceActivity?: () => void,
+    onMicLevel?: (rms: number) => void,
   ): Promise<void> {
     // Use the system's default sample rate — the AudioWorklet will downsample
     // to 24kHz internally. This avoids the "different sample-rate" DOMException
@@ -54,6 +56,8 @@ export class AudioCaptureService {
         onChunk(event.data);
       } else if (event.data?.type === "voice_activity" && onVoiceActivity) {
         onVoiceActivity();
+      } else if (event.data?.type === "mic_level" && onMicLevel) {
+        onMicLevel(event.data.rms as number);
       }
     };
 

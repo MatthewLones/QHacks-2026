@@ -34,6 +34,7 @@ export type VoiceEventMap = {
   audioPlaybackStart: () => void;
   responseStart: () => void;
   status: (status: ConnectionStatus) => void;
+  micLevel: (rms: number) => void;
 };
 
 type Listener = (...args: never[]) => void;
@@ -88,19 +89,10 @@ export class VoiceConnection {
               this.ws.send(JSON.stringify({ type: "audio", data: base64 }));
             }
           },
-          () => {
-            // Voice activity detected on mic — instant barge-in
-            const playing = this.playback.isPlaying;
-            if (playing) {
-              console.log(
-                "[VC] MIC ACTIVITY detected while playback active → INTERRUPT",
-              );
-              this.playback.interrupt();
-              this.activeResponseId = null; // Reject stale audio still in-flight
-              this.send({ type: "interrupt" });
-              // Clear subtitles immediately so old words stop appearing
-              this.emit("responseStart");
-            }
+          undefined, // VAD not used for interrupt — speech-based interrupt via STT transcript
+          (rms: number) => {
+            // Pipe mic level to UI for waveform visualization
+            this.emit("micLevel", rms);
           },
         );
         console.log("[VC] Mic capture started OK");
@@ -234,10 +226,22 @@ export class VoiceConnection {
         this.emit("responseStart");
         break;
 
-      case "transcript":
+      case "transcript": {
         console.log(`[BE→VC] #${msgCount} TRANSCRIPT: "${msg.text}"`);
+        // Always clear stale subtitles when user speaks
+        this.emit("responseStart");
+        // Speech-based barge-in: interrupt playback if still active
+        if (this.playback.isPlaying) {
+          console.log(
+            "[VC] TRANSCRIPT received while playback active → INTERRUPT",
+          );
+          this.playback.interrupt();
+          this.activeResponseId = null; // Reject stale audio still in-flight
+          this.send({ type: "interrupt" });
+        }
         this.emit("transcript", msg.text as string);
         break;
+      }
 
       case "audio": {
         // Drop audio from stale (cancelled) responses still in-flight

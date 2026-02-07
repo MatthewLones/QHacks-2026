@@ -66,6 +66,11 @@ interface AppState {
   markSubtitleAudioStart: () => void;
   clearGuideSubtitle: () => void;
 
+  // Mic level for waveform visualization
+  micLevel: number;
+  isUserSpeaking: boolean;
+  setMicLevel: (rms: number) => void;
+
   // Confirm exploration flow
   confirmExplorationRequested: boolean;
   requestConfirmExploration: () => void;
@@ -125,6 +130,10 @@ export const useAppStore = create<AppState>((set) => ({
     })),
   markSubtitleAudioStart: () => set({ _subtitleAudioStart: performance.now() }),
   clearGuideSubtitle: () => set({ guideSubtitle: '', _wordTimestamps: [], _subtitleAudioStart: 0 }),
+
+  micLevel: 0,
+  isUserSpeaking: false,
+  setMicLevel: (rms) => set({ micLevel: rms, isUserSpeaking: rms > 0.02 }),
 
   confirmExplorationRequested: false,
   requestConfirmExploration: () => set({ confirmExplorationRequested: true }),
