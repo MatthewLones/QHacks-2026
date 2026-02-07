@@ -10,9 +10,10 @@
 | Layer | Technology | Version | Why |
 |-------|-----------|---------|-----|
 | Frontend Framework | Vite + React + TypeScript | React 19, Vite 6 | Fast dev server, minimal config, strong TS support |
-| 3D Globe | Globe.gl | Latest | Three.js-based, lightweight (~200KB), beautiful defaults |
+| 3D Globe | react-globe.gl + CartoDB tiles | Latest | Three.js-based React wrapper for globe.gl; CartoDB Dark Matter tiles provide real map imagery at all zoom levels; click-to-coordinate, markers, fly-to built-in; no API key needed |
 | 3D World Renderer | SparkJS (`@sparkjsdev/spark`) | 0.1.10 | World Labs' recommended Gaussian splat renderer, Three.js-based |
-| 3D Engine | Three.js | r170+ | Required by Globe.gl and SparkJS |
+| 3D Engine | Three.js | r170+ | Required by react-globe.gl and SparkJS (shared single instance) |
+| Reverse Geocoding | Nominatim (OpenStreetMap) | Free | Click lat/lng → human-readable place name; no API key; 1 req/s limit (fine for interactive use) |
 | Particle Effects | tsParticles | Latest | Star field on landing page |
 | State Management | Zustand | Latest | Minimal boilerplate, no providers, fast |
 | Styling | Tailwind CSS v4 | Latest | Rapid prototyping, glassmorphism utilities |
@@ -77,7 +78,147 @@
 
 ---
 
-## 3. Voice Pipeline (Critical Path)
+## 3. Globe Integration (react-globe.gl)
+
+### 3.1 Package & Compatibility
+
+- **Package:** `react-globe.gl` (React wrapper for `globe.gl` → `three-globe` → Three.js)
+- **Three.js dedup:** Both react-globe.gl (`>=0.154 <1`) and SparkJS (`^0.170`) overlap at r170+. Verify single instance with `npm ls three`. If duplicated, add `"overrides": { "three": "^0.170.0" }` to `package.json`.
+- **React 19:** May need `--legacy-peer-deps` during install if peer dep warnings appear.
+
+### 3.2 Tile Engine (CartoDB Dark Matter)
+
+react-globe.gl renders a blank sphere by default. The `globeTileEngineUrl` prop accepts a function `(x, y, level) => tileUrl` to load real map tiles.
+
+```typescript
+const CARTO_SUBDOMAINS = ['a', 'b', 'c', 'd'];
+
+const cartoTileUrl = (x: number, y: number, l: number): string => {
+  const subdomain = CARTO_SUBDOMAINS[(x + y) % CARTO_SUBDOMAINS.length];
+  return `https://${subdomain}.basemaps.cartocdn.com/dark_nolabels/${l}/${x}/${y}.png`;
+};
+```
+
+- Use `dark_nolabels` (not `dark_all`) — flat text labels look distorted on a 3D sphere.
+- CartoDB tiles are CORS-enabled, free, no API key required.
+- Tiles load progressively on zoom — city-level detail available at high zoom levels.
+
+### 3.3 Click → Location Selection
+
+```typescript
+// onGlobeClick returns { lat, lng } for any click on the globe surface
+<GlobeGL onGlobeClick={({ lat, lng }) => {
+    const name = await reverseGeocode(lat, lng);  // Nominatim
+    setLocation({ lat, lng, name });               // Zustand store
+}} />
+```
+
+**Reverse geocoding via Nominatim (free, no key):**
+```typescript
+async function reverseGeocode(lat: number, lng: number): Promise<string> {
+    const res = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=6&addressdetails=1`,
+        { headers: { 'User-Agent': 'QHacks2026-Globe/1.0' } }  // Required by Nominatim policy
+    );
+    const data = await res.json();
+    const addr = data.address;
+    return [addr?.city || addr?.town || addr?.state, addr?.country]
+        .filter(Boolean).join(', ') || `${lat.toFixed(2)}, ${lng.toFixed(2)}`;
+}
+```
+
+### 3.4 Markers (Points + Pulsing Rings)
+
+Two visual layers combine for a glowing marker effect:
+
+```typescript
+// Static cyan pin at selected location
+pointsData={location ? [{ lat: location.lat, lng: location.lng }] : []}
+pointColor={() => '#00d4ff'}
+pointAltitude={0.06}
+pointRadius={0.6}
+
+// Pulsing concentric rings radiating from the pin
+ringsData={location ? [{
+    lat: location.lat, lng: location.lng,
+    maxR: 5, propagationSpeed: 3, repeatPeriod: 1200
+}] : []}
+ringColor={() => (t: number) => `rgba(0, 212, 255, ${Math.sqrt(1 - t)})`}
+```
+
+### 3.5 Camera Fly-To
+
+```typescript
+// Via ref — works for both user clicks and backend-driven location suggestions
+const globeRef = useRef<GlobeInstance>(null);
+
+// Fly to a location with smooth animation
+globeRef.current.pointOfView(
+    { lat, lng, altitude: 1.5 },  // altitude in globe-radius units (2.5=far, 1.5=regional, 0.5=city)
+    1500                           // animation duration in ms
+);
+```
+
+A `useEffect` watching `location` in Zustand triggers fly-to on ANY location change — whether from user click or from backend `suggested_location` message. This ensures a single codepath for both flows.
+
+### 3.6 Backend-Driven Location Suggestion
+
+The AI guide can suggest locations via a Gemini function tool. Flow:
+1. Gemini calls `suggest_location({ lat, lng, name })` function tool
+2. Backend sends WebSocket message: `{ type: "suggested_location", lat, lng, name }`
+3. Frontend `useVoiceWebSocket` handler calls `setLocation()` in Zustand
+4. Globe's `useEffect` detects location change → places marker + flies camera to it
+
+### 3.7 Styling & Behavior
+
+```typescript
+<GlobeGL
+    globeTileEngineUrl={cartoTileUrl}
+    backgroundColor="rgba(0, 0, 0, 0)"   // Transparent — parent container handles bg
+    showAtmosphere={true}
+    atmosphereColor="#4a9eff"              // Blue glow matching cosmic theme
+    atmosphereAltitude={0.2}
+    animateIn={true}
+/>
+```
+
+- **Auto-rotate:** Enable `controls().autoRotate = true` with `autoRotateSpeed = 0.4` on mount. Disable on first user interaction.
+- **Resize handling:** Track `window.innerWidth/Height` in state, pass as `width/height` props.
+
+### 3.8 WebGL Context Cleanup
+
+**Critical:** Browsers limit simultaneous WebGL contexts (~8-16). The globe must release its context before SparkJS creates one for world rendering.
+
+```typescript
+useEffect(() => {
+    return () => {
+        const renderer = globeRef.current?.renderer();
+        if (renderer) {
+            renderer.dispose();
+            renderer.forceContextLoss();
+        }
+    };
+}, []);
+```
+
+### 3.9 TypeScript Typing
+
+react-globe.gl's ref type doesn't expose imperative methods. Create a custom interface:
+
+```typescript
+// frontend/src/types/globe.d.ts
+export interface GlobeInstance {
+    pointOfView: (pov: { lat?: number; lng?: number; altitude?: number }, transitionMs?: number) => void;
+    controls: () => { autoRotate: boolean; autoRotateSpeed: number; enableZoom: boolean };
+    scene: () => THREE.Scene;
+    camera: () => THREE.Camera;
+    renderer: () => THREE.WebGLRenderer;
+}
+```
+
+---
+
+## 4. Voice Pipeline (Critical Path)
 
 This is the most complex and important subsystem. The pipeline must feel real-time.
 
@@ -175,6 +316,7 @@ response = client.models.generate_content_stream(
             trigger_world_generation,
             select_music,
             generate_fact,
+            suggest_location,
             google_search
         ]
     }
@@ -301,6 +443,20 @@ generate_fact = {
             "category": {"type": "string", "enum": ["culture", "technology", "politics", "daily_life", "art"]}
         },
         "required": ["fact_text", "category"]
+    }
+}
+
+suggest_location = {
+    "name": "suggest_location",
+    "description": "Suggest a specific location on the globe for the user to explore. The frontend will place a marker and fly the camera to this location.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "lat": {"type": "number", "description": "Latitude of the location"},
+            "lng": {"type": "number", "description": "Longitude of the location"},
+            "name": {"type": "string", "description": "Human-readable name of the location (e.g., 'Rome, Italy')"}
+        },
+        "required": ["lat", "lng", "name"]
     }
 }
 ```
@@ -587,6 +743,9 @@ All communication over a single WebSocket connection at `ws://backend/ws/voice`.
 
 // Guide text (for display alongside voice)
 { type: "guide_text", text: string }
+
+// AI guide suggests a location → frontend places marker + flies camera to it
+{ type: "suggested_location", lat: number, lng: number, name: string }
 ```
 
 ---
@@ -606,7 +765,7 @@ QHacks-2026/
 │   ├── src/
 │   │   ├── components/
 │   │   │   ├── Landing.tsx           # Particles + Enter button
-│   │   │   ├── Globe.tsx             # Globe.gl + location selection
+│   │   │   ├── Globe.tsx             # react-globe.gl + CartoDB tiles + markers + fly-to
 │   │   │   ├── TimeSelector.tsx      # Era scroll/wheel picker
 │   │   │   ├── LoadingExperience.tsx  # Narration + visuals during generation
 │   │   │   ├── WorldExplorer.tsx     # SparkJS 3D world renderer
@@ -618,6 +777,8 @@ QHacks-2026/
 │   │   │   └── useAudioCapture.ts    # AudioWorklet mic capture
 │   │   ├── data/
 │   │   │   └── musicLibrary.ts       # Track metadata
+│   │   ├── types/
+│   │   │   └── globe.d.ts            # GlobeInstance interface for typed ref
 │   │   ├── workers/
 │   │   │   └── audio-processor.js    # AudioWorklet (adapted from KingHacks)
 │   │   ├── store.ts                  # Zustand state
@@ -678,7 +839,7 @@ FRONTEND_URL=http://localhost:5173   # For CORS
         "react-dom": "^19",
         "three": "^0.170",
         "@sparkjsdev/spark": "^0.1.10",
-        "globe.gl": "latest",
+        "react-globe.gl": "latest",
         "zustand": "latest",
         "@tsparticles/react": "latest",
         "@tsparticles/slim": "latest"

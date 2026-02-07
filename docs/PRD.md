@@ -38,15 +38,19 @@ The theme calls for projects about prosperity and flourishing in Culture & Socie
 - Clicking "Enter" triggers a fade transition to the globe view
 
 ### Phase 2: Globe & Time Selection
-- Interactive 3D globe (Globe.gl) fills the screen
+- Interactive 3D globe (react-globe.gl + CartoDB Dark Matter tiles) fills the screen
+- Real map imagery at all zoom levels — user can zoom from full-globe down to city-level detail
 - User can rotate, zoom, and click any location on the globe
+- Clicking places a glowing cyan marker with pulsing rings at the selected spot
+- Click coordinates are reverse-geocoded (Nominatim) to display a human-readable location name
+- The AI guide can also suggest locations — the globe auto-pins and flies the camera to the suggested spot
 - A time period selector (scrollable lever/wheel) on the side lets users dial into an era
   - Spans from ancient history (~3000 BC) to modern day
   - Shows era labels (e.g., "Roman Empire", "Song Dynasty", "Renaissance")
 - The AI guide greets the user via voice (Gradium TTS): *"Welcome, explorer. Where would you like to go?"*
 - The user can speak back (Gradium STT) to discuss options with the guide
 - The guide responds with context about the selected location and era
-- A visual indicator shows the selected location + time period
+- A glassmorphism info card at the bottom shows the selected location name + coordinates + time period
 
 ### Phase 3: Conversation
 - The user converses with the AI guide about the selected destination
@@ -82,7 +86,7 @@ The theme calls for projects about prosperity and flourishing in Culture & Socie
 | Feature | Description |
 |---------|-------------|
 | Landing page | Particle star field + glassmorphism Enter button + ambient audio |
-| 3D Globe | Globe.gl interactive globe with click-to-select location |
+| 3D Globe | react-globe.gl with CartoDB Dark Matter tiles; click-to-select with lat/lng + reverse geocode; glowing marker + pulsing rings; camera fly-to; AI-driven location suggestions |
 | Time selector | Scrollable era picker with historical labels |
 | Voice conversation | Gradium STT + TTS wrapping Gemini for AI guide dialogue |
 | World generation | World Labs API triggered by location/era selection |

@@ -16,8 +16,13 @@
 - [ ] Landing page: tsParticles star field (cosmic preset)
 - [ ] Glassmorphism "Enter" button centered, fade transition on click
 - [ ] Add ambient audio autoplay on landing
-- [ ] Globe component: Globe.gl rendering with click handler for location selection
-- [ ] Glow effect on selected globe point, location name display
+- [ ] Globe component: `react-globe.gl` with CartoDB Dark Matter tile engine (`dark_nolabels`)
+- [ ] Globe click handler: `onGlobeClick` → extract lat/lng → reverse geocode via Nominatim → store in Zustand
+- [ ] Globe markers: `pointsData` (cyan pin) + `ringsData` (pulsing glow rings) at selected location
+- [ ] Globe camera fly-to: `useEffect` on `location` change → `pointOfView({ lat, lng, altitude }, 1500)`
+- [ ] Globe auto-rotate on mount (stops on first interaction)
+- [ ] Globe type declaration: create `frontend/src/types/globe.d.ts` with `GlobeInstance` interface
+- [ ] Location info card: glassmorphism overlay at bottom showing location name + coordinates
 - [ ] Time selector: vertical scroll/wheel UI showing eras from 3000 BC to present
 - [ ] Era labels + visual indicator for selected period
 - [ ] Wire location + time selection to Zustand store
@@ -30,7 +35,7 @@
 - [ ] Gradium TTS service: connect to WebSocket, send test text, receive audio
 - [ ] Verify both STT and TTS work standalone
 - [ ] Gemini guide service: set up system prompt, implement `generate_response()` with streaming
-- [ ] Define function calling tool schemas (world gen, music, facts)
+- [ ] Define function calling tool schemas (world gen, music, facts, suggest_location)
 - [ ] Voice WebSocket router: wire full pipeline (audio in → Gradium STT → Gemini → Gradium TTS → audio out)
 - [ ] Test voice pipeline end-to-end with a WebSocket client
 
@@ -49,6 +54,8 @@
 - [ ] WebSocket hook: create `useVoiceWebSocket` — connect to backend, send audio chunks, receive transcript/audio/status messages
 - [ ] Wire WebSocket hook to Zustand store
 - [ ] Voice ↔ Globe integration: send selected location/time to backend via WebSocket `context` message
+- [ ] Handle `suggested_location` WebSocket messages: update Zustand → Globe auto-pins + flies to location
+- [ ] Globe WebGL context cleanup on phase transition (dispose renderer before SparkJS takes over)
 - [ ] Show transcript + guide text in UI
 - [ ] Add mic button toggle
 - [ ] Loading experience: transition animation (fade + particles)
@@ -72,6 +79,7 @@
 - [ ] Improve response streaming latency
 - [ ] REST endpoint for frontend to poll world status independently
 - [ ] Serve splat URLs to frontend, handle generation failures gracefully
+- [ ] Implement `suggest_location` Gemini function call handler — send `{ type: "suggested_location", lat, lng, name }` via WebSocket
 
 ### Milestone 2
 > User can: Land → Enter → See globe → Click location → Pick era → Talk to AI guide → Say "let's go" → See loading experience → World renders in SparkJS.
@@ -177,7 +185,7 @@ Cut in this order (last item cut first):
 2. Music crossfade transitions (just hard-switch tracks)
 3. Loading experience visual enhancements (keep narration, drop fancy visuals)
 4. Time selector scroll animation (use a simple dropdown instead)
-5. Globe.gl (use a static map image with click regions instead)
+5. react-globe.gl tile engine (fall back to static Earth texture — still has click-to-coordinate + markers)
 
 **Never cut:**
 - Voice pipeline (Gradium + Gemini) — this IS the project
