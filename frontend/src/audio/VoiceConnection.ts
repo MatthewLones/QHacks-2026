@@ -5,8 +5,8 @@
  * AudioPlaybackService (PCM → speaker) to the backend WebSocket at /ws/voice.
  *
  * Protocol (matches backend/routers/voice.py):
- *   Outbound: audio, context, phase
- *   Inbound:  transcript, audio, guide_text, fact, world_status, music, suggested_location
+ *   Outbound: audio, context, phase, interrupt
+ *   Inbound:  transcript, audio, guide_text, fact, world_status, music, suggested_location, interrupt
  */
 
 import { AudioCaptureService } from "./AudioCaptureService";
@@ -34,6 +34,9 @@ export type VoiceEventMap = {
 
 type Listener = (...args: never[]) => void;
 
+let audioChunksSent = 0;
+let msgCount = 0;
+
 export class VoiceConnection {
   private ws: WebSocket | null = null;
   private capture = new AudioCaptureService();
@@ -48,25 +51,50 @@ export class VoiceConnection {
   async connect(): Promise<void> {
     if (this.ws) return;
 
+    audioChunksSent = 0;
+    msgCount = 0;
     this.setStatus("connecting");
 
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const url = `${proto}//${window.location.host}/ws/voice`;
+    console.log("[VC] Connecting to:", url);
     this.ws = new WebSocket(url);
 
     this.ws.onopen = async () => {
+      console.log("[VC] WebSocket opened");
       this.playback.start();
 
       try {
-        await this.capture.start((pcmBytes: ArrayBuffer) => {
-          if (this.ws?.readyState === WebSocket.OPEN) {
-            const base64 = arrayBufferToBase64(pcmBytes);
-            this.ws.send(JSON.stringify({ type: "audio", data: base64 }));
-          }
-        });
+        console.log("[VC] Starting mic capture...");
+        await this.capture.start(
+          (pcmBytes: ArrayBuffer) => {
+            if (this.ws?.readyState === WebSocket.OPEN) {
+              audioChunksSent++;
+              const base64 = arrayBufferToBase64(pcmBytes);
+              if (audioChunksSent <= 3 || audioChunksSent % 100 === 0) {
+                console.log(
+                  `[VC→BE] Audio #${audioChunksSent}: ${pcmBytes.byteLength}B`,
+                );
+              }
+              this.ws.send(JSON.stringify({ type: "audio", data: base64 }));
+            }
+          },
+          () => {
+            // Voice activity detected on mic — instant barge-in
+            const playing = this.playback.isPlaying;
+            if (playing) {
+              console.log(
+                "[VC] MIC ACTIVITY detected while playback active → INTERRUPT",
+              );
+              this.playback.interrupt();
+              this.send({ type: "interrupt" });
+            }
+          },
+        );
+        console.log("[VC] Mic capture started OK");
         this.setStatus("connected");
       } catch (err) {
-        console.error("[VoiceConnection] Mic capture failed:", err);
+        console.error("[VC] Mic capture failed:", err);
         this.setStatus("error");
         this.disconnect();
       }
@@ -80,22 +108,27 @@ export class VoiceConnection {
         >;
         this.handleMessage(msg);
       } catch (err) {
-        console.error("[VoiceConnection] Bad message:", err);
+        console.error("[VC] Bad message:", err);
       }
     };
 
-    this.ws.onclose = () => {
+    this.ws.onclose = (event) => {
+      console.log(
+        `[VC] WebSocket closed: code=${event.code} reason="${event.reason}"`,
+      );
       this.cleanup();
       this.setStatus("disconnected");
     };
 
-    this.ws.onerror = () => {
+    this.ws.onerror = (event) => {
+      console.error("[VC] WebSocket error:", event);
       this.cleanup();
       this.setStatus("error");
     };
   }
 
   disconnect(): void {
+    console.log("[VC] disconnect() called");
     if (this.ws) {
       this.ws.close();
       this.ws = null;
@@ -108,10 +141,12 @@ export class VoiceConnection {
     location: { lat: number; lng: number; name: string },
     timePeriod: { label: string; year: number },
   ): void {
+    console.log("[VC→BE] sendContext:", { location, timePeriod });
     this.send({ type: "context", location, timePeriod });
   }
 
   sendPhase(phase: string): void {
+    console.log("[VC→BE] sendPhase:", phase);
     this.send({ type: "phase", phase });
   }
 
@@ -145,37 +180,61 @@ export class VoiceConnection {
   }
 
   private setStatus(status: ConnectionStatus): void {
+    console.log(`[VC] Status: ${this._status} → ${status}`);
     this._status = status;
     this.emit("status", status);
   }
 
   private send(msg: Record<string, unknown>): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
+      // Log non-audio outbound messages
+      if (msg.type !== "audio") {
+        console.log("[VC→BE] Send:", JSON.stringify(msg));
+      }
       this.ws.send(JSON.stringify(msg));
+    } else {
+      console.warn("[VC→BE] DROPPED (ws not open):", msg.type);
     }
   }
 
   private handleMessage(msg: Record<string, unknown>): void {
+    msgCount++;
+
     switch (msg.type) {
       case "transcript":
+        console.log(`[BE→VC] #${msgCount} TRANSCRIPT: "${msg.text}"`);
         this.emit("transcript", msg.text as string);
         break;
 
       case "audio": {
-        const pcm = base64ToArrayBuffer(msg.data as string);
+        const dataStr = msg.data as string;
+        const pcm = base64ToArrayBuffer(dataStr);
+        if (msgCount <= 5 || msgCount % 50 === 0) {
+          console.log(
+            `[BE→VC] #${msgCount} AUDIO: ${pcm.byteLength}B, playback.isPlaying=${this.playback.isPlaying}`,
+          );
+        }
         this.playback.playChunk(pcm);
         break;
       }
 
       case "guide_text":
+        console.log(`[BE→VC] #${msgCount} GUIDE_TEXT: "${msg.text}"`);
         this.emit("guideText", msg.text as string);
         break;
 
       case "fact":
+        console.log(
+          `[BE→VC] #${msgCount} FACT: "${msg.text}" (${msg.category})`,
+        );
         this.emit("fact", msg.text as string, msg.category as string);
         break;
 
       case "world_status":
+        console.log(
+          `[BE→VC] #${msgCount} WORLD_STATUS: ${msg.status}`,
+          msg.worldId ? `id=${msg.worldId}` : "",
+        );
         this.emit(
           "worldStatus",
           msg.status as string,
@@ -185,10 +244,14 @@ export class VoiceConnection {
         break;
 
       case "music":
+        console.log(`[BE→VC] #${msgCount} MUSIC: ${msg.trackUrl}`);
         this.emit("music", msg.trackUrl as string);
         break;
 
       case "suggested_location":
+        console.log(
+          `[BE→VC] #${msgCount} SUGGESTED_LOCATION: ${msg.name} (${msg.lat}, ${msg.lng})`,
+        );
         this.emit(
           "suggestedLocation",
           msg.lat as number,
@@ -197,12 +260,22 @@ export class VoiceConnection {
         );
         break;
 
+      case "interrupt":
+        console.log(
+          `[BE→VC] #${msgCount} INTERRUPT from backend — stopping playback`,
+        );
+        this.playback.interrupt();
+        break;
+
       default:
-        console.log("[VoiceConnection] Unknown message type:", msg.type);
+        console.log(`[BE→VC] #${msgCount} UNKNOWN: type=${msg.type}`, msg);
     }
   }
 
   private cleanup(): void {
+    console.log(
+      `[VC] cleanup: ${audioChunksSent} audio chunks sent, ${msgCount} msgs received`,
+    );
     this.capture.stop();
     this.playback.stop();
     this.ws = null;

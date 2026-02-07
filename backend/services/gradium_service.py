@@ -139,7 +139,10 @@ class GradiumService:
         raw = await ws.recv()
         msg = json.loads(raw)
         if msg.get("type") != "ready":
-            logger.warning("Expected TTS 'ready' message, got: %s", msg.get("type"))
+            error_detail = msg.get("message", msg.get("error", str(msg)))
+            logger.error("TTS setup failed: %s — %s", msg.get("type"), error_detail)
+            await ws.close()
+            raise ConnectionError(f"Gradium TTS setup failed: {error_detail}")
         return GradiumTTSStream(ws)
 
     async def tts_synthesize(

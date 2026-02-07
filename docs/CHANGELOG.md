@@ -17,6 +17,50 @@ Each entry includes what changed, why it was changed, and which files were affec
 
 ---
 
+## [Session 6/7/8] - 2026-02-07
+
+### Added
+- **Client-side voice activity detection for instant barge-in** — AudioWorklet now computes RMS energy on every audio frame. When voice is detected above threshold (0.015) while TTS is playing, the frontend immediately stops playback and sends an `interrupt` message to the backend. This is ~100ms latency vs 300-600ms for waiting on STT transcripts.
+  - `frontend/public/audio-processor.js` — Added RMS computation, `VOICE_THRESHOLD=0.015`, `VOICE_COOLDOWN_MS=300`, posts `{type: "voice_activity", rms}` messages alongside PCM chunks
+  - `frontend/src/audio/AudioCaptureService.ts` — Added optional `onVoiceActivity` callback parameter to `start()`. Distinguishes `ArrayBuffer` (PCM data) from `{type: "voice_activity"}` objects in worklet port messages
+  - `frontend/src/audio/AudioPlaybackService.ts` — Added `isPlaying` getter (checks `scheduledSources.length > 0`) so VoiceConnection can detect when guide audio is active
+  - `frontend/src/audio/VoiceConnection.ts` — Wired voice activity callback: when mic activity detected while `playback.isPlaying`, instantly calls `playback.interrupt()` and sends `{type: "interrupt"}` to backend
+
+- **Backend frontend-interrupt handler** — Backend now processes `{type: "interrupt"}` messages from the frontend. When received, cancels any active Gemini/TTS response task immediately. Previously, interrupts could only come from STT-based barge-in detection.
+  - `backend/routers/voice.py` — Added `elif msg_type == "interrupt"` handler in main WebSocket loop
+
+- **Comprehensive logging across full pipeline** — Added detailed timestamped logging to trace every message through the pipeline. Enables debugging of timing issues between STT, VAD, Gemini, and TTS.
+  - `backend/routers/voice.py` — `[timestamp][VOICE]`, `[timestamp][STT]`, `[timestamp][VAD]`, `[timestamp][GEMINI]`, `[timestamp][TTS]`, `[timestamp][FE→STT]`, `[timestamp][FE→BE]`, `[timestamp][WS→FE]` log prefixes. VAD logs show all qualifying horizons, buffer state, and trigger status. Turn counting. Session stats on disconnect.
+  - `backend/services/gemini_guide.py` — Logs full conversation history dump before each Gemini call (role, parts summary for each entry), system prompt preview, input text, stream progress, chunk count, function calls
+  - `frontend/src/audio/VoiceConnection.ts` — `[VC→BE]` outbound and `[BE→VC]` inbound logging with message sequence numbers, audio chunk counters, status transitions, cleanup stats
+
+- **TTS retry with backoff for concurrency limits** — Gradium has a 2-session concurrency limit per API key, and closed sessions take time to free on their servers. When TTS creation fails with "Concurrencylimit exceeded", the backend now retries up to 3 times with 3-second delays instead of immediately falling back to text-only mode.
+  - `backend/routers/voice.py` — `_process_gemini_response()` TTS creation wrapped in retry loop with `ConnectionError` detection for "Concurrencylimit" substring
+
+### Fixed
+- **Premature VAD turn detection splitting sentences** — Root cause: The 1.0s VAD horizon fires on brief inter-word pauses (~500ms between "the" and "world"), triggering a turn before the user finishes their sentence. The 2.0s horizon stays low (0.22) during these same gaps. Changed `VAD_MIN_HORIZON_S` from 1.0 to 2.0 and `VAD_INACTIVITY_THRESHOLD` from 0.5 to 0.7 so only sustained silence triggers a turn.
+  - `backend/routers/voice.py` — `VAD_MIN_HORIZON_S = 2.0`, `VAD_INACTIVITY_THRESHOLD = 0.7`
+
+- **False barge-in from trailing STT words** — Root cause: When VAD fires a turn, the STT pipeline still has words in flight. These arrive 0-150ms later and were treated as the user interrupting (barge-in), which cancelled the just-launched Gemini response. The late word then became its own broken turn with fragmentary text (e.g., "me all" instead of "Yeah, take me, tell me all about it"). Two-part fix:
+  1. **Removed STT-based barge-in entirely** — Incoming STT transcripts during an active response no longer trigger cancellation. Barge-in is now handled exclusively by the frontend mic activity detection, which is faster and doesn't suffer from pipeline lag.
+  2. **Debounced turn firing** — When VAD crosses the inactivity threshold, the turn is marked as "ready" but not immediately fired. It waits 500ms (`TURN_DEBOUNCE_S = 0.5`) for the STT pipeline to deliver any remaining words. Only after 500ms of no new STT words does the turn actually fire with the complete sentence.
+  - `backend/routers/voice.py` — Added `TURN_DEBOUNCE_S = 0.5`, `turn_ready` flag, `last_stt_word_at` timestamp. Removed barge-in from STT transcript handler. Added debounced turn check after every STT message.
+
+- **Gemini function call history not saved** — Root cause: `generate_response()` recorded model responses in conversation history with only `text` parts, ignoring `function_call` parts. When the model called `suggest_location`, the history entry was empty (`model:` with no parts), breaking Gemini's expected conversation flow (model function_call → user function_response → model text).
+  - `backend/services/gemini_guide.py` — Model response history now includes both `types.Part(text=...)` and `types.Part(function_call=types.FunctionCall(name=..., args=...))` parts
+
+- **TTS concurrency exhaustion from rapid barge-in cycles** — Root cause: False barge-in caused rapid create→cancel→create TTS session cycles. Each cancelled session took time to free on Gradium's servers, exhausting the 2-session limit. The debounced turn firing fix prevents most rapid cycles, and the TTS retry with backoff handles remaining cases.
+  - `backend/routers/voice.py` — Combination of debounce fix (fewer cancellations) + retry logic (graceful recovery)
+
+### Notes
+- The debounced turn firing adds ~500ms latency to response start (waiting for STT to settle), but eliminates split sentences which caused much worse UX (broken turns, wasted Gemini calls, TTS session churn)
+- Frontend mic activity detection provides faster interrupt response (~100ms) than the old STT-based barge-in (~300-600ms) since it operates directly on audio energy without waiting for speech recognition
+- Gradium has no session management API — no way to list, kill, or reset sessions. Leaked sessions persist for 300 seconds before auto-expiring. The retry logic is the only mitigation.
+- Gemini conversation history entry [4] in previous logs showed `model:` with empty parts — this was the function call history bug. Fixed entries now show `model: fn_call:suggest_location, text:"..."` correctly.
+- AudioWorklet voice activity uses 300ms cooldown to prevent rapid-fire interrupt messages from continuous speech
+
+---
+
 ## [Session 4/5] - 2026-02-07
 
 ### Added

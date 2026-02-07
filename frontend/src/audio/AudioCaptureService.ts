@@ -1,9 +1,11 @@
 /**
  * Mic capture via AudioWorklet.
  *
- * Framework-agnostic service class. Captures microphone audio at 24kHz
- * (native Gradium STT rate — no resampling needed), converts to Int16 PCM
- * via the AudioWorklet, and delivers 1920-sample (80ms) chunks via callback.
+ * Framework-agnostic service class. Captures microphone audio at the system's
+ * native sample rate, downsamples to 24kHz inside the AudioWorklet (linear
+ * interpolation), and delivers Int16 PCM chunks via callback.
+ *
+ * Output: 1920 samples per chunk (80ms at 24kHz = 3840 bytes).
  */
 
 export class AudioCaptureService {
@@ -14,23 +16,27 @@ export class AudioCaptureService {
 
   /**
    * Request mic permission, start capture, and call onChunk for each PCM chunk.
-   * @param onChunk Called with raw Int16 PCM ArrayBuffer (3840 bytes = 1920 samples)
+   * @param onChunk Called with raw Int16 PCM ArrayBuffer (3840 bytes = 1920 samples @ 24kHz)
+   * @param onVoiceActivity Called when the AudioWorklet detects voice energy above threshold
    */
-  async start(onChunk: (pcmBytes: ArrayBuffer) => void): Promise<void> {
-    // Create AudioContext at 24kHz BEFORE getUserMedia — the user gesture
-    // is still active, so the context won't be suspended.
-    this.audioContext = new AudioContext({ sampleRate: 24000 });
+  async start(
+    onChunk: (pcmBytes: ArrayBuffer) => void,
+    onVoiceActivity?: () => void,
+  ): Promise<void> {
+    // Use the system's default sample rate — the AudioWorklet will downsample
+    // to 24kHz internally. This avoids the "different sample-rate" DOMException
+    // when connecting a MediaStreamSource to a non-native-rate AudioContext.
+    this.audioContext = new AudioContext();
 
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: {
-        sampleRate: { ideal: 24000 },
         channelCount: 1,
         echoCancellation: true,
         noiseSuppression: true,
       },
     });
 
-    // Safety net — resume if suspended (e.g. autoplay policy)
+    // Resume if suspended (autoplay policy)
     if (this.audioContext.state === "suspended") {
       await this.audioContext.resume();
     }
@@ -43,13 +49,16 @@ export class AudioCaptureService {
       "audio-capture-processor",
     );
 
-    this.workletNode.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
-      onChunk(event.data);
+    this.workletNode.port.onmessage = (event: MessageEvent) => {
+      if (event.data instanceof ArrayBuffer) {
+        onChunk(event.data);
+      } else if (event.data?.type === "voice_activity" && onVoiceActivity) {
+        onVoiceActivity();
+      }
     };
 
-    // Connect: mic source → worklet (no destination — capture only, no echo)
+    // Connect: mic source → worklet → destination (must be connected to keep processing)
     this.sourceNode.connect(this.workletNode);
-    // AudioWorklet must be connected to destination to keep processing
     this.workletNode.connect(this.audioContext.destination);
   }
 

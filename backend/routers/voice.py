@@ -5,8 +5,9 @@ Full flow (per TECHNICAL.md Section 4):
   → Gemini (streaming) → response text → Gradium TTS → audio chunks
   → Frontend playback
 
-Also handles: context updates, phase changes, function call side-effects
-(world generation, music selection, fact generation, location suggestions).
+Supports barge-in: if the user speaks while the guide is responding,
+the current response is cancelled, playback is interrupted on the frontend,
+and the new user input is processed immediately.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import asyncio
 import base64
 import json
 import logging
+import time
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -27,13 +29,37 @@ from services.music_selector import select_track
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# VAD inactivity threshold — when above this, consider the user done speaking
-VAD_INACTIVITY_THRESHOLD = 0.5
+# VAD inactivity threshold — only trigger on sustained silence, not brief word pauses.
+# We check horizons >= 2.0s only. The 1.0s horizon fires on brief inter-word gaps
+# (e.g. 0.85 after just 500ms of pause between "the" and "world"), but the 2.0s
+# horizon stays low (0.22) during those same gaps. This prevents premature turns.
+VAD_INACTIVITY_THRESHOLD = 0.7
+VAD_MIN_HORIZON_S = 2.0
+# After VAD says "user stopped", wait this long for STT pipeline to flush
+# remaining words before firing the turn. Prevents split sentences.
+TURN_DEBOUNCE_S = 0.5
 
 
-async def _send_json(ws: WebSocket, msg: dict) -> None:
-    """Send a JSON message to the frontend WebSocket."""
-    await ws.send_text(json.dumps(msg))
+def _ts() -> str:
+    """Compact timestamp for logging (seconds.millis since epoch)."""
+    return f"{time.time():.3f}"
+
+
+async def _send_json(ws: WebSocket, msg: dict, closed: asyncio.Event) -> None:
+    """Send a JSON message to the frontend WebSocket, unless closed."""
+    if closed.is_set():
+        print(f"[{_ts()}][WS→FE] BLOCKED (ws closed): {msg.get('type')}")
+        return
+    try:
+        await ws.send_text(json.dumps(msg))
+        # Log outbound messages (truncate audio data)
+        log_msg = dict(msg)
+        if log_msg.get("data") and len(str(log_msg["data"])) > 60:
+            log_msg["data"] = f"<{len(str(msg['data']))} chars b64>"
+        print(f"[{_ts()}][WS→FE] {json.dumps(log_msg)}")
+    except Exception as e:
+        print(f"[{_ts()}][WS→FE] SEND ERROR: {e}")
+        closed.set()
 
 
 async def _handle_function_call(
@@ -41,33 +67,33 @@ async def _handle_function_call(
     ws: WebSocket,
     gemini: GeminiGuide,
     world_labs: WorldLabsService,
+    closed: asyncio.Event,
 ) -> None:
     """Execute a Gemini function call and send results to frontend."""
     name = fc["name"]
     args = fc["args"]
-    logger.info("Gemini function call: %s(%s)", name, args)
+    print(f"[{_ts()}][FUNC] Executing: {name}({json.dumps(args)})")
 
     if name == "trigger_world_generation":
-        await _send_json(ws, {"type": "world_status", "status": "generating"})
+        await _send_json(ws, {"type": "world_status", "status": "generating"}, closed)
         try:
             operation_id = await world_labs.generate_world(
                 scene_description=args["scene_description"],
                 display_name=f"{args['location']} — {args['time_period']}",
             )
-            # Poll in background — send status when done
             asyncio.create_task(
-                _poll_world_and_notify(operation_id, ws, world_labs)
+                _poll_world_and_notify(operation_id, ws, world_labs, closed)
             )
             gemini.add_function_result(name, {"status": "generation_started", "operation_id": operation_id})
         except Exception as e:
             logger.error("World generation failed: %s", e)
-            await _send_json(ws, {"type": "world_status", "status": "error"})
+            await _send_json(ws, {"type": "world_status", "status": "error"}, closed)
             gemini.add_function_result(name, {"status": "error", "error": str(e)})
 
     elif name == "select_music":
         track = select_track(era=args["era"], region=args["region"], mood=args["mood"])
         if track:
-            await _send_json(ws, {"type": "music", "trackUrl": track["file"]})
+            await _send_json(ws, {"type": "music", "trackUrl": track["file"]}, closed)
             gemini.add_function_result(name, {"status": "playing", "track": track["title"]})
         else:
             gemini.add_function_result(name, {"status": "no_track_found"})
@@ -77,7 +103,7 @@ async def _handle_function_call(
             "type": "fact",
             "text": args["fact_text"],
             "category": args["category"],
-        })
+        }, closed)
         gemini.add_function_result(name, {"status": "displayed"})
 
     elif name == "suggest_location":
@@ -86,15 +112,15 @@ async def _handle_function_call(
             "lat": args["lat"],
             "lng": args["lng"],
             "name": args["name"],
-        })
+        }, closed)
         gemini.add_function_result(name, {"status": "location_suggested"})
 
     else:
-        logger.warning("Unknown function call: %s", name)
+        print(f"[{_ts()}][FUNC] Unknown function call: {name}")
 
 
 async def _poll_world_and_notify(
-    operation_id: str, ws: WebSocket, world_labs: WorldLabsService
+    operation_id: str, ws: WebSocket, world_labs: WorldLabsService, closed: asyncio.Event,
 ) -> None:
     """Background task: poll world generation status and notify frontend."""
     try:
@@ -106,10 +132,10 @@ async def _poll_world_and_notify(
             "status": "ready",
             "worldId": world_id,
             "splatUrl": splat_url,
-        })
+        }, closed)
     except Exception as e:
         logger.error("World polling failed: %s", e)
-        await _send_json(ws, {"type": "world_status", "status": "error"})
+        await _send_json(ws, {"type": "world_status", "status": "error"}, closed)
 
 
 async def _process_gemini_response(
@@ -118,56 +144,114 @@ async def _process_gemini_response(
     gemini: GeminiGuide,
     gradium: GradiumService,
     world_labs: WorldLabsService,
+    closed: asyncio.Event,
 ) -> None:
-    """Send user text to Gemini, stream response text to TTS and frontend."""
+    """Send user text to Gemini, stream response text to TTS and frontend.
+
+    Handles asyncio.CancelledError for barge-in support — when the user
+    starts speaking mid-response, this task is cancelled and TTS is closed.
+
+    If TTS creation fails (e.g. concurrency limit), falls back to text-only mode.
+    """
     tts_stream = None
-    tts_send_task = None
     tts_recv_task = None
+    response_id = f"resp-{time.time():.0f}"
+
+    print(f"[{_ts()}][GEMINI] ===== RESPONSE {response_id} START =====")
+    print(f"[{_ts()}][GEMINI] User text: \"{user_text}\"")
+    print(f"[{_ts()}][GEMINI] History length: {len(gemini.conversation_history)} entries")
 
     try:
-        tts_stream = await gradium.create_tts_stream()
+        # Try to create TTS stream with retry for concurrency limits.
+        # Gradium has a 2-session limit; closed sessions take a moment to free.
+        for _tts_attempt in range(3):
+            try:
+                tts_stream = await gradium.create_tts_stream()
+                print(f"[{_ts()}][TTS] Stream created OK for {response_id}")
+                break
+            except ConnectionError as e:
+                if "Concurrencylimit" in str(e) and _tts_attempt < 2:
+                    print(f"[{_ts()}][TTS] Concurrency limit, retry {_tts_attempt + 1}/3 in 3s...")
+                    await asyncio.sleep(3)
+                else:
+                    print(f"[{_ts()}][TTS] UNAVAILABLE ({e}), text-only fallback")
+                    break
+            except Exception as e:
+                print(f"[{_ts()}][TTS] UNAVAILABLE ({e}), text-only fallback")
+                break
 
-        # Task: receive TTS audio and forward to frontend
-        async def forward_tts_audio():
-            async for audio_chunk in tts_stream.iter_audio():
-                encoded = base64.b64encode(audio_chunk).decode("ascii")
-                await _send_json(ws, {"type": "audio", "data": encoded})
+        # If TTS is available, start forwarding audio to frontend
+        if tts_stream:
+            tts_chunk_count = 0
 
-        tts_recv_task = asyncio.create_task(forward_tts_audio())
+            async def forward_tts_audio():
+                nonlocal tts_chunk_count
+                async for audio_chunk in tts_stream.iter_audio():
+                    tts_chunk_count += 1
+                    encoded = base64.b64encode(audio_chunk).decode("ascii")
+                    if tts_chunk_count <= 3 or tts_chunk_count % 20 == 0:
+                        print(f"[{_ts()}][TTS→FE] Audio chunk #{tts_chunk_count}: {len(audio_chunk)} bytes")
+                    await _send_json(ws, {"type": "audio", "data": encoded}, closed)
+                print(f"[{_ts()}][TTS] Audio stream ended. Total chunks: {tts_chunk_count}")
 
-        # Stream Gemini response
-        full_text = ""
+            tts_recv_task = asyncio.create_task(forward_tts_audio())
+
+        # Stream Gemini response — text always goes to frontend, TTS if available
+        gemini_chunk_count = 0
+        full_response_text = ""
         async for chunk in gemini.generate_response(user_text):
             if chunk["type"] == "text":
                 text_piece = chunk["text"]
-                full_text += text_piece
-                # Send text to frontend for display
-                await _send_json(ws, {"type": "guide_text", "text": text_piece})
-                # Stream text to TTS for audio synthesis
-                await tts_stream.send_text(text_piece)
+                full_response_text += text_piece
+                gemini_chunk_count += 1
+                print(f"[{_ts()}][GEMINI] Chunk #{gemini_chunk_count}: \"{text_piece}\"")
+                await _send_json(ws, {"type": "guide_text", "text": text_piece}, closed)
+                if tts_stream:
+                    await tts_stream.send_text(text_piece)
 
             elif chunk["type"] == "function_call":
-                await _handle_function_call(chunk, ws, gemini, world_labs)
+                print(f"[{_ts()}][GEMINI] Function call: {chunk['name']}")
+                await _handle_function_call(chunk, ws, gemini, world_labs, closed)
+
+        print(f"[{_ts()}][GEMINI] Response complete. {gemini_chunk_count} chunks, {len(full_response_text)} chars")
+        print(f"[{_ts()}][GEMINI] Full response: \"{full_response_text[:200]}\"")
 
         # Signal TTS that we're done sending text
-        await tts_stream.send_flush()
+        if tts_stream:
+            print(f"[{_ts()}][TTS] Sending flush (end_of_stream)")
+            await tts_stream.send_flush()
 
         # Wait for all TTS audio to be forwarded
         if tts_recv_task:
+            print(f"[{_ts()}][TTS] Waiting for audio forwarding to complete...")
             await tts_recv_task
+            print(f"[{_ts()}][TTS] Audio forwarding done")
 
+    except asyncio.CancelledError:
+        print(f"[{_ts()}][GEMINI] ===== RESPONSE {response_id} CANCELLED (barge-in) =====")
+        if tts_recv_task and not tts_recv_task.done():
+            tts_recv_task.cancel()
+            try:
+                await tts_recv_task
+            except (asyncio.CancelledError, Exception):
+                pass
     except Exception as e:
-        logger.error("Gemini/TTS pipeline error: %s", e)
+        print(f"[{_ts()}][GEMINI] ===== RESPONSE {response_id} ERROR: {e} =====")
     finally:
         if tts_stream:
-            await tts_stream.close()
+            try:
+                await tts_stream.close()
+                print(f"[{_ts()}][TTS] Stream closed for {response_id}")
+            except Exception:
+                pass
+        print(f"[{_ts()}][GEMINI] ===== RESPONSE {response_id} END =====")
 
 
 @router.websocket("/ws/voice")
 async def voice_ws(websocket: WebSocket):
     """Main voice pipeline WebSocket endpoint."""
     await websocket.accept()
-    print("[VOICE] WebSocket connected")
+    print(f"[{_ts()}][VOICE] ========== WebSocket CONNECTED ==========")
 
     gradium = GradiumService(api_key=GRADIUM_API_KEY)
     gemini = GeminiGuide(api_key=GEMINI_API_KEY)
@@ -175,59 +259,120 @@ async def voice_ws(websocket: WebSocket):
 
     stt_stream = None
     transcript_buffer = ""
+    current_response: asyncio.Task | None = None
+    ws_closed = asyncio.Event()  # Prevents sending on a closed WebSocket
+    turn_count = 0
 
     try:
-        print("[VOICE] Creating STT stream...")
+        print(f"[{_ts()}][VOICE] Creating STT stream...")
         stt_stream = await gradium.create_stt_stream()
-        print("[VOICE] STT stream created OK")
+        print(f"[{_ts()}][VOICE] STT stream created OK")
 
         # Task: receive STT messages (transcripts + VAD)
         async def receive_stt():
-            nonlocal transcript_buffer
+            nonlocal transcript_buffer, current_response, turn_count
             msg_count = 0
+            turn_ready = False
+            last_stt_word_at = 0.0
             while True:
                 try:
                     msg = await stt_stream.receive()
                     msg_count += 1
                     msg_type = msg.get("type", "unknown")
-                    if msg_type not in ("step",):  # don't spam VAD steps
-                        print(f"[STT] #{msg_count} type={msg_type}: {str(msg)[:120]}")
                 except Exception as e:
-                    print(f"[STT] receive error: {e}")
+                    print(f"[{_ts()}][STT] Receive error after {msg_count} msgs: {e}")
                     break
 
-                if msg.get("type") == "text":
+                if msg_type == "text":
                     text = msg["text"]
                     transcript_buffer += " " + text
-                    print(f"[STT] TRANSCRIPT: {text}")
+                    last_stt_word_at = time.time()
+                    print(f"[{_ts()}][STT] TRANSCRIPT: \"{text}\" | Buffer: \"{transcript_buffer.strip()}\"")
                     await _send_json(websocket, {
                         "type": "transcript",
                         "text": text,
                         "partial": False,
-                    })
+                    }, ws_closed)
+                    # NOTE: No STT-based barge-in here. Barge-in is handled
+                    # exclusively by frontend mic activity detection (interrupt msg).
+                    # STT words often arrive after VAD fires, causing false barge-in.
 
-                elif msg.get("type") == "step":
-                    # VAD format: list of {horizon_s, inactivity_prob} objects
+                elif msg_type == "step":
+                    # VAD format: list of {horizon_s, inactivity_prob} objects.
+                    # Only check horizons >= VAD_MIN_HORIZON_S to avoid triggering
+                    # on brief mid-sentence pauses (e.g. 0.5s between words).
                     vad = msg.get("vad", [])
                     max_inactivity = 0.0
+                    qualifying_horizons = []
                     for entry in vad:
                         if isinstance(entry, dict):
-                            max_inactivity = max(
-                                max_inactivity, entry.get("inactivity_prob", 0)
-                            )
-                    if max_inactivity > VAD_INACTIVITY_THRESHOLD and transcript_buffer.strip():
-                        # User finished speaking — process the turn
-                        user_text = transcript_buffer.strip()
-                        transcript_buffer = ""
-                        logger.info("Turn detected, user said: %s", user_text[:100])
-                        await _process_gemini_response(
-                            user_text, websocket, gemini, gradium, world_labs
+                            h = entry.get("horizon_s", 0)
+                            p = entry.get("inactivity_prob", 0)
+                            if h >= VAD_MIN_HORIZON_S:
+                                qualifying_horizons.append(f"{h}s:{p:.2f}")
+                                max_inactivity = max(max_inactivity, p)
+
+                    # Log VAD: always when buffer has text, every 50th step otherwise
+                    has_text = bool(transcript_buffer.strip())
+                    if has_text or (msg_count % 50 == 0):
+                        print(
+                            f"[{_ts()}][VAD] step#{msg_count} | "
+                            f"max_inactivity={max_inactivity:.2f} (thresh={VAD_INACTIVITY_THRESHOLD}) | "
+                            f"horizons=[{', '.join(qualifying_horizons)}] | "
+                            f"buffer={'\"' + transcript_buffer.strip()[:50] + '\"' if has_text else '<empty>'} | "
+                            f"{'>>> WOULD FIRE' if max_inactivity > VAD_INACTIVITY_THRESHOLD and has_text else 'no trigger'}"
                         )
 
+                    if max_inactivity > VAD_INACTIVITY_THRESHOLD and transcript_buffer.strip():
+                        if not turn_ready:
+                            print(f"[{_ts()}][VAD] Turn READY — waiting {TURN_DEBOUNCE_S}s for STT to settle")
+                        turn_ready = True
+
+                elif msg_type == "ready":
+                    print(f"[{_ts()}][STT] Ready message received")
+
+                else:
+                    print(f"[{_ts()}][STT] Unknown msg type={msg_type}: {str(msg)[:150]}")
+
+                # --- Debounced turn firing ---
+                # Fire turn only after VAD indicates silence AND STT has settled
+                # (no new words for TURN_DEBOUNCE_S). This prevents splitting
+                # sentences when STT delivers trailing words after VAD fires.
+                if (turn_ready
+                        and transcript_buffer.strip()
+                        and last_stt_word_at > 0
+                        and (time.time() - last_stt_word_at) > TURN_DEBOUNCE_S):
+                    turn_count += 1
+                    user_text = transcript_buffer.strip()
+                    transcript_buffer = ""
+                    turn_ready = False
+                    last_stt_word_at = 0.0
+                    print(f"[{_ts()}][VOICE] ===== TURN #{turn_count} FIRED (debounced) =====")
+                    print(f"[{_ts()}][VOICE] User said: \"{user_text}\"")
+
+                    # Cancel any in-progress response and wait for TTS cleanup
+                    if current_response and not current_response.done():
+                        print(f"[{_ts()}][VOICE] Cancelling previous response for new turn")
+                        current_response.cancel()
+                        try:
+                            await current_response
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                        await _send_json(websocket, {"type": "interrupt"}, ws_closed)
+
+                    # Launch new response as background task (non-blocking)
+                    print(f"[{_ts()}][VOICE] Launching Gemini response task for turn #{turn_count}")
+                    current_response = asyncio.create_task(
+                        _process_gemini_response(
+                            user_text, websocket, gemini, gradium, world_labs, ws_closed
+                        )
+                    )
+
         stt_task = asyncio.create_task(receive_stt())
-        print("[VOICE] STT receive task started, entering main loop")
+        print(f"[{_ts()}][VOICE] STT receive task started, entering main loop")
 
         audio_msg_count = 0
+        interrupt_count = 0
         # Main loop: receive messages from frontend
         while True:
             raw = await websocket.receive_text()
@@ -238,14 +383,15 @@ async def voice_ws(websocket: WebSocket):
                 # Forward audio to Gradium STT
                 pcm_bytes = base64.b64decode(msg["data"])
                 audio_msg_count += 1
-                if audio_msg_count <= 3 or audio_msg_count % 50 == 0:
-                    print(f"[VOICE] Audio chunk #{audio_msg_count}: {len(pcm_bytes)} bytes")
+                if audio_msg_count <= 5 or audio_msg_count % 100 == 0:
+                    print(f"[{_ts()}][FE→STT] Audio chunk #{audio_msg_count}: {len(pcm_bytes)} bytes")
                 await stt_stream.send_audio(pcm_bytes)
 
             elif msg_type == "context":
                 # Update Gemini guide context
                 location = msg.get("location", {})
                 time_period = msg.get("timePeriod", {})
+                print(f"[{_ts()}][FE→BE] Context update: location={location}, timePeriod={time_period}")
                 gemini.update_context(
                     location_name=location.get("name", ""),
                     lat=location.get("lat", ""),
@@ -254,16 +400,39 @@ async def voice_ws(websocket: WebSocket):
                     year=time_period.get("year", ""),
                 )
 
+            elif msg_type == "interrupt":
+                # Frontend detected mic activity while guide was speaking.
+                # Cancel the current response immediately.
+                interrupt_count += 1
+                is_active = current_response is not None and not current_response.done() if current_response else False
+                print(f"[{_ts()}][FE→BE] INTERRUPT #{interrupt_count} from frontend | response_active={is_active}")
+                if current_response and not current_response.done():
+                    print(f"[{_ts()}][VOICE] Frontend interrupt — cancelling response")
+                    current_response.cancel()
+                    try:
+                        await current_response
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                    current_response = None
+
             elif msg_type == "phase":
+                print(f"[{_ts()}][FE→BE] Phase update: {msg.get('phase')}")
                 gemini.update_context(phase=msg.get("phase", "globe_selection"))
 
+            else:
+                print(f"[{_ts()}][FE→BE] Unknown message type: {msg_type}")
+
     except WebSocketDisconnect:
-        print("[VOICE] WebSocket disconnected")
+        print(f"[{_ts()}][VOICE] ========== WebSocket DISCONNECTED ==========")
     except Exception as e:
-        print(f"[VOICE] ERROR: {type(e).__name__}: {e}")
+        print(f"[{_ts()}][VOICE] ========== ERROR: {type(e).__name__}: {e} ==========")
         import traceback
         traceback.print_exc()
     finally:
+        ws_closed.set()
+        if current_response and not current_response.done():
+            current_response.cancel()
         if stt_stream:
             await stt_stream.close()
-        logger.info("Voice WebSocket closed")
+        print(f"[{_ts()}][VOICE] Session stats: {audio_msg_count} audio chunks, {turn_count} turns")
+        print(f"[{_ts()}][VOICE] ========== CLEANUP COMPLETE ==========")

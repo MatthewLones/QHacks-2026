@@ -153,11 +153,28 @@ class GeminiGuide:
           {"type": "text", "text": "..."}
           {"type": "function_call", "name": "...", "args": {...}}
         """
+        print(f"[GEMINI_GUIDE] === generate_response called ===")
+        print(f"[GEMINI_GUIDE] Input: \"{user_text}\"")
+        print(f"[GEMINI_GUIDE] History ({len(self.conversation_history)} entries):")
+        for i, entry in enumerate(self.conversation_history):
+            role = entry.role
+            parts_summary = []
+            for p in entry.parts:
+                if p.text:
+                    parts_summary.append(f"text:\"{p.text[:80]}\"")
+                elif p.function_call:
+                    parts_summary.append(f"fn_call:{p.function_call.name}")
+                elif p.function_response:
+                    parts_summary.append(f"fn_resp:{p.function_response.name}")
+            print(f"[GEMINI_GUIDE]   [{i}] {role}: {', '.join(parts_summary)}")
+
         self.conversation_history.append(
             types.Content(role="user", parts=[types.Part(text=user_text)])
         )
 
         config = self._build_config()
+        print(f"[GEMINI_GUIDE] System prompt: \"{self._system_prompt()[:150]}...\"")
+        print(f"[GEMINI_GUIDE] Calling gemini-2.5-flash with {len(self.conversation_history)} messages...")
 
         response = self.client.models.generate_content_stream(
             model="gemini-2.5-flash",
@@ -184,13 +201,21 @@ class GeminiGuide:
                     full_text += part.text
                     yield {"type": "text", "text": part.text}
 
-        # Record model response in history
+        print(f"[GEMINI_GUIDE] Stream done. Total text: {len(full_text)} chars, {len(function_calls)} function calls")
+
+        # Record model response in history (include both text and function calls)
         parts = []
         if full_text:
             parts.append(types.Part(text=full_text))
+        for fc in function_calls:
+            parts.append(types.Part(function_call=types.FunctionCall(
+                name=fc["name"],
+                args=fc["args"],
+            )))
         self.conversation_history.append(
             types.Content(role="model", parts=parts)
         )
+        print(f"[GEMINI_GUIDE] History now: {len(self.conversation_history)} entries")
 
     def add_function_result(self, name: str, result: dict) -> None:
         """Add function execution result to conversation history."""

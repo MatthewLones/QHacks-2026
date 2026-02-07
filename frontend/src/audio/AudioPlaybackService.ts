@@ -57,6 +57,11 @@ export class AudioPlaybackService {
     };
   }
 
+  /** Whether audio is currently scheduled/playing. */
+  get isPlaying(): boolean {
+    return this.scheduledSources.length > 0;
+  }
+
   /** Stop all playback immediately (e.g. user starts talking, interrupts guide). */
   interrupt(): void {
     for (const source of this.scheduledSources) {
