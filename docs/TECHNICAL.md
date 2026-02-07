@@ -120,15 +120,43 @@ async def voice_ws(websocket: WebSocket):
 
 ```python
 # WebSocket: wss://us.api.gradium.ai/api/speech/asr
+# Auth header: x-api-key: YOUR_API_KEY
+#
+# IMPORTANT: Setup message MUST be the first message sent after connection.
+# Server will close the connection if any other message is sent first.
+#
 # Setup message:
 {
+    "type": "setup",
     "model_name": "default",
-    "input_format": "pcm"
+    "input_format": "pcm",
+    "language": "en"
 }
 # Audio input: PCM 24kHz, 16-bit signed int, mono
-# Chunk size: 1920 samples (80ms)
-# Returns: text messages (transcripts) + VAD messages
-# Turn detection: vad[2]["inactivity_prob"] > 0.5
+# Audio chunks must be base64-encoded in JSON: { "type": "audio", "audio": "<base64>" }
+# Recommended chunk size: 1920 samples (80ms at 24kHz)
+#
+# Server returns two message types:
+#
+# Transcript: { "type": "text", "text": "...", "start_s": 0.5, "end_s": 2.3 }
+# VAD:        { "type": "step", "vad": [timestamp, duration, {"inactivity_prob": 0.95}] }
+#
+# Turn detection: trigger when vad[2]["inactivity_prob"] > 0.5
+```
+
+**Python SDK (recommended over raw WebSocket):**
+```python
+import gradium
+
+client = gradium.client.GradiumClient(api_key="...", region="us")
+
+stream = await client.stt_stream(
+    setup={"model_name": "default", "input_format": "pcm"}
+)
+
+# Feed audio chunks, iterate transcripts
+async for message in stream.iter_text():
+    print(f"Text: {message['text']}")  # start_s, end_s also available
 ```
 
 ### 3.4 Gemini Integration
@@ -157,15 +185,39 @@ response = client.models.generate_content_stream(
 
 ```python
 # WebSocket: wss://us.api.gradium.ai/api/speech/tts
+# Auth header: x-api-key: YOUR_API_KEY
+#
+# IMPORTANT: Setup message MUST be the first message sent after connection.
+#
 # Setup message:
 {
+    "type": "setup",
     "voice_id": "SELECTED_VOICE_ID",
     "model_name": "default",
     "output_format": "pcm"
 }
-# Send: text messages (streamed from Gemini)
-# Receive: PCM audio chunks (48kHz, 16-bit, mono, 3840 samples per chunk)
+# output_format options: "wav", "pcm", "opus", "pcm_8000", "pcm_16000", "pcm_24000",
+#                        "ulaw_8000", "alaw_8000"
+#
+# Send text: { "type": "text", "text": "Hello world" }  (can stream incrementally)
+# Receive: binary PCM audio chunks (48kHz, 16-bit, mono, 3840 samples per chunk = 80ms)
 # Latency: <300ms time-to-first-token
+```
+
+**Python SDK (recommended over raw WebSocket):**
+```python
+stream = await client.tts_stream(
+    setup={
+        "model_name": "default",
+        "voice_id": "YTpq7expH9539ERJ",
+        "output_format": "pcm"
+    },
+    text=text_generator()  # async generator yielding text chunks from Gemini
+)
+
+async for audio_chunk in stream.iter_bytes():
+    # Forward audio_chunk to frontend via WebSocket
+    pass
 ```
 
 ### 3.6 Audio Playback (Frontend)
@@ -257,25 +309,48 @@ generate_fact = {
 
 ## 5. World Labs Integration
 
-### 5.1 Generation Flow
+### 5.1 Models
+
+| Model | Generation Time | Cost (text input) | Quality |
+|-------|----------------|-------------------|---------|
+| `Marble 0.1-plus` | ~5 minutes | 1,580 credits | High |
+| `Marble 0.1-mini` | **30–45 seconds** | 230 credits | Lower but usable |
+
+**Recommendation:** Use `Marble 0.1-mini` for the live demo flow (30s wait is manageable). Use `Marble 0.1-plus` for pre-generated showcase worlds.
+
+**Credits:** $1.00 = 1,250 credits. Min purchase $5 = 6,250 credits. Free tier: 4 generations/month.
+**IMPORTANT:** API credits are separate from Marble app credits — must purchase at platform.worldlabs.ai.
+
+### 5.2 Generation Flow
 
 ```python
 import httpx
+import asyncio
 
 WORLD_LABS_BASE = "https://api.worldlabs.ai/marble/v1"
 
-async def generate_world(prompt: str) -> str:
+async def generate_world(scene_description: str, model: str = "Marble 0.1-mini") -> str:
     """Returns operation_id for polling."""
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f"{WORLD_LABS_BASE}/worlds:generate",
-            headers={"WLT-Api-Key": API_KEY},
-            json={"prompt": prompt}
+            headers={
+                "WLT-Api-Key": API_KEY,
+                "Content-Type": "application/json"
+            },
+            json={
+                "display_name": "QHacks World",
+                "world_prompt": {
+                    "type": "text",
+                    "text_prompt": scene_description
+                },
+                "model": model
+            }
         )
         return response.json()["operation_id"]
 
 async def poll_world_status(operation_id: str) -> dict:
-    """Poll until world is ready. Returns world data."""
+    """Poll until world is ready. Returns world data with assets."""
     async with httpx.AsyncClient() as client:
         while True:
             response = await client.get(
@@ -284,8 +359,8 @@ async def poll_world_status(operation_id: str) -> dict:
             )
             data = response.json()
             if data.get("done"):
-                return data["result"]
-            await asyncio.sleep(10)  # Poll every 10 seconds
+                return data["result"]  # Contains world object with assets
+            await asyncio.sleep(5)  # Poll every 5 seconds
 
 async def get_world_assets(world_id: str) -> dict:
     """Fetch splat URLs, panorama, mesh."""
@@ -297,11 +372,42 @@ async def get_world_assets(world_id: str) -> dict:
         return response.json()
 ```
 
-### 5.2 SparkJS Rendering (Frontend)
+### 5.3 Response Schema
+
+```json
+{
+  "id": "world_abc123",
+  "display_name": "QHacks World",
+  "world_marble_url": "https://marble.worldlabs.ai/world/world_abc123",
+  "assets": {
+    "splats": {
+      "spz_urls": [
+        "https://...100k.spz",
+        "https://...500k.spz",
+        "https://...full.spz"
+      ]
+    },
+    "mesh": {
+      "collider_mesh_url": "https://...collider.glb"
+    },
+    "imagery": {
+      "pano_url": "https://...pano.jpg"
+    },
+    "caption": "AI-generated description",
+    "thumbnail_url": "https://...thumb.jpg"
+  }
+}
+```
+
+**Splat resolutions:** 100k (fast preview) | 500k (balanced) | full (best quality).
+Use 500k for the demo — good balance of quality and load time.
+**Note:** SPZ URLs are pre-signed and may expire — render them promptly.
+
+### 5.4 SparkJS Rendering (Frontend)
 
 ```typescript
 import * as THREE from 'three';
-import { SplatMesh } from '@sparkjsdev/spark';
+import { SplatMesh, SparkControls } from '@sparkjsdev/spark';
 
 function WorldScene({ splatUrl }: { splatUrl: string }) {
     const mountRef = useRef<HTMLDivElement>(null);
@@ -309,29 +415,48 @@ function WorldScene({ splatUrl }: { splatUrl: string }) {
     useEffect(() => {
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
+
+        // IMPORTANT: antialias must be false for splat rendering performance
+        const renderer = new THREE.WebGLRenderer({ antialias: false });
         renderer.setSize(window.innerWidth, window.innerHeight);
         mountRef.current!.appendChild(renderer.domElement);
 
-        // Load World Labs splat
-        const world = new SplatMesh({ url: splatUrl });
+        // Load World Labs splat (use 500k resolution for balanced quality/speed)
+        const world = new SplatMesh({
+            url: splatUrl,
+            onLoad: () => console.log('World loaded')
+        });
         scene.add(world);
 
-        // Orbit controls for exploration
-        const controls = new OrbitControls(camera, renderer.domElement);
+        // SparkJS built-in FPS controls (keyboard + mouse + gamepad + touch)
+        const controls = new SparkControls();
+        const clock = new THREE.Clock();
 
-        function animate() {
-            requestAnimationFrame(animate);
-            controls.update();
+        renderer.setAnimationLoop(() => {
+            controls.update(camera, clock.getDelta());
             renderer.render(scene, camera);
-        }
-        animate();
+        });
 
-        return () => { /* cleanup */ };
+        return () => {
+            renderer.dispose();
+            renderer.setAnimationLoop(null);
+        };
     }, [splatUrl]);
 
     return <div ref={mountRef} className="w-full h-full" />;
 }
+```
+
+**SplatMesh constructor options:**
+```typescript
+new SplatMesh({
+    url: string,              // Fetch SPZ from URL
+    fileBytes?: Uint8Array,   // Or provide raw bytes
+    maxSplats?: number,       // Reserve space
+    onLoad?: (mesh) => void,  // Load callback
+    editable?: boolean        // Default: true
+})
+// Supported formats: .spz, .ply, .splat, .ksplat
 ```
 
 ---

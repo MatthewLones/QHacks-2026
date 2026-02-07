@@ -55,9 +55,11 @@ The theme calls for projects about prosperity and flourishing in Culture & Socie
 - When the user is ready, they say something like "Let's go" or "Take me there"
 - The guide responds: *"Wonderful choice. Let me prepare your journey..."*
 
-### Phase 4: Loading / Narration (~5 minutes)
+### Phase 4: Loading / Narration (~30 seconds to ~5 minutes)
 - Screen transitions with a cinematic fade
-- World Labs API begins generating the 3D world (async, ~5 min)
+- World Labs API begins generating the 3D world
+  - **Marble 0.1-mini:** ~30–45 seconds (default for live demo)
+  - **Marble 0.1-plus:** ~5 minutes (used for pre-generated showcase worlds)
 - During the wait:
   - The AI guide narrates the history of the destination in detail (Gemini generates, Gradium speaks)
   - Era-appropriate music fades in (selected by the LLM from a curated library)
@@ -119,5 +121,5 @@ The theme calls for projects about prosperity and flourishing in Culture & Socie
 
 - Time from "Enter" to first AI voice greeting: < 3 seconds
 - Voice response latency (user speaks → AI audio begins): < 2 seconds
-- World generation completes within loading experience window: ~5 minutes
+- World generation completes within loading experience window: ~30s (mini) / ~5 min (plus)
 - Number of distinct worlds demoed: 2-3 (including pre-generated)

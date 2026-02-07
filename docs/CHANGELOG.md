@@ -2,17 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
-Format: Each session entry logs what was added, changed, fixed, and any notes.
+Each entry includes what changed, why it was changed, and which files were affected.
 
 ---
 
 ## [Unreleased]
 
 ### Added
-- Project documentation: PRD, Technical Document, Roadmap, Changelog
-
-### Notes
-- Project scaffolding and implementation not yet started
+- **Project documentation** — Establish shared understanding of scope, architecture, and execution plan before writing any code
+  - `docs/PRD.md`
+  - `docs/TECHNICAL.md`
+  - `docs/ROADMAP.md`
+  - `docs/CHANGELOG.md`
 
 ---
 
@@ -21,16 +22,21 @@ Format: Each session entry logs what was added, changed, fixed, and any notes.
 ## [Session X] - YYYY-MM-DD HH:MM
 
 ### Added
-- New features or files added
+- **Feature/item name** — Justification for why this was added
+  - `path/to/file1.ts`
+  - `path/to/file2.py`
 
 ### Changed
-- Modifications to existing features or files
+- **What changed** — Why this change was made
+  - `path/to/modified/file.ts`
 
 ### Fixed
-- Bug fixes
+- **Bug description** — Root cause and how it was resolved
+  - `path/to/fixed/file.py`
 
 ### Removed
-- Deleted features or files
+- **What was removed** — Why it was removed
+  - `path/to/deleted/file.ts`
 
 ### Notes
 - Observations, decisions, blockers, or anything worth remembering
