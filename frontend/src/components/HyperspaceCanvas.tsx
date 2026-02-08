@@ -35,7 +35,7 @@ const JUMP_VELOCITY_INC = 1.25;   // jump velocity
 const JUMP_SIZE_INC = 1.15;       // jump size multiplier
 const SIZE_INC = 1.01;            // idle size multiplier
 const STAR_COUNT = 300;
-const JUMP_DURATION_MS = 5000;    // user requested ~5-6 seconds
+const JUMP_DURATION_MS = 4000;    // hyperspace duration in ms
 
 const WARP_COLORS: [number, number, number][] = [
   [197, 239, 247],

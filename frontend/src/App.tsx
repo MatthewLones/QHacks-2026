@@ -20,12 +20,13 @@ import { musicService } from './audio/MusicService';
 import { generateWorld } from './utils/worldGeneration';
 
 type WarpState = 'idle' | 'initiating' | 'jumping';
+const HYPERSPACE_SFX_URL = encodeURI('/sfx/BIG LONG WHOOSH SOUND EFFECT __ SOUND FX.mp3');
+const HYPERSPACE_SFX_PLAY_MS = 9000;
 
 function App() {
   const phase = useAppStore((s) => s.phase);
   const setPhase = useAppStore((s) => s.setPhase);
   const location = useAppStore((s) => s.location);
-  const userProfile = useAppStore((s) => s.userProfile);
   const transitionComplete = useAppStore((s) => s.transitionComplete);
   const confirmRequested = useAppStore((s) => s.confirmExplorationRequested);
   const clearConfirm = useAppStore((s) => s.clearConfirmExploration);
@@ -40,6 +41,8 @@ function App() {
   const hyperspaceRef = useRef<HyperspaceHandle>(null);
   const [warpState, setWarpState] = useState<WarpState>('idle');
   const rootRef = useRef<HTMLDivElement>(null);
+  const hyperspaceSfxRef = useRef<HTMLAudioElement | null>(null);
+  const hyperspaceSfxStopTimerRef = useRef<number | null>(null);
   const slowIdleVelocity = 1 + (DEFAULT_IDLE_VELOCITY - 1) * 0.5;
   const idleVelocity =
     (phase === 'globe' || phase === 'landing') && warpState === 'idle'
@@ -69,6 +72,27 @@ function App() {
     setPhase('loading');
   }, [setPhase]);
 
+  const playHyperspaceSfx = useCallback(() => {
+    const audio = hyperspaceSfxRef.current ?? new Audio(HYPERSPACE_SFX_URL);
+    audio.preload = 'auto';
+    hyperspaceSfxRef.current = audio;
+
+    if (hyperspaceSfxStopTimerRef.current !== null) {
+      window.clearTimeout(hyperspaceSfxStopTimerRef.current);
+      hyperspaceSfxStopTimerRef.current = null;
+    }
+
+    audio.currentTime = 0;
+    void audio.play().catch((err) => {
+      console.warn('[SFX] hyperspace woosh failed to play:', err);
+    });
+
+    hyperspaceSfxStopTimerRef.current = window.setTimeout(() => {
+      audio.pause();
+      hyperspaceSfxStopTimerRef.current = null;
+    }, HYPERSPACE_SFX_PLAY_MS);
+  }, []);
+
   const handleEnterButtonPress = useCallback(() => {
     if (phase !== 'globe' || warpState !== 'idle') return;
 
@@ -79,13 +103,31 @@ function App() {
     const endPress = () => {
       if (released) return;
       released = true;
+      playHyperspaceSfx();
       setWarpState('jumping');
       hyperspaceRef.current?.release();
     };
 
     window.addEventListener('pointerup', endPress, { once: true });
     window.addEventListener('pointercancel', endPress, { once: true });
-  }, [phase, warpState]);
+  }, [phase, playHyperspaceSfx, warpState]);
+
+  useEffect(() => {
+    const audio = new Audio(HYPERSPACE_SFX_URL);
+    audio.preload = 'auto';
+    hyperspaceSfxRef.current = audio;
+    return () => {
+      if (hyperspaceSfxStopTimerRef.current !== null) {
+        window.clearTimeout(hyperspaceSfxStopTimerRef.current);
+        hyperspaceSfxStopTimerRef.current = null;
+      }
+      audio.pause();
+      audio.currentTime = 0;
+      if (hyperspaceSfxRef.current === audio) {
+        hyperspaceSfxRef.current = null;
+      }
+    };
+  }, []);
 
   // --- Voice lifecycle ---
 
