@@ -188,9 +188,9 @@ class WorldLabsService:
         return {
             "spz_urls": splat_urls,
             "default_spz_url": (
-                splat_urls.get("500k")
+                splat_urls.get("full_res")
+                or splat_urls.get("500k")
                 or splat_urls.get("100k")
-                or splat_urls.get("full_res")
                 or next(iter(splat_urls.values()), None)
             ),
             "collider_mesh_url": mesh.get("collider_mesh_url"),

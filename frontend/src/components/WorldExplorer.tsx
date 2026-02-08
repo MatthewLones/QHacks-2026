@@ -38,9 +38,9 @@ export default function WorldExplorer() {
     };
 
     push(worldAssets.defaultSpzUrl);
+    push(worldAssets.spzUrls.full_res);
     push(worldAssets.spzUrls['500k']);
     push(worldAssets.spzUrls['100k']);
-    push(worldAssets.spzUrls.full_res);
     for (const url of Object.values(worldAssets.spzUrls)) {
       push(url);
     }
@@ -94,6 +94,9 @@ export default function WorldExplorer() {
       alpha: false,
       powerPreference: 'high-performance',
     });
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.NoToneMapping;
+    renderer.toneMappingExposure = 1.0;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 
     const resize = () => {
@@ -312,6 +315,7 @@ export default function WorldExplorer() {
           try {
             panoTexture = await textureLoader.loadAsync(panoUrl);
             if (!disposed) {
+              panoTexture.colorSpace = THREE.SRGBColorSpace;
               panoTexture.mapping = THREE.EquirectangularReflectionMapping;
               scene.background = panoTexture;
             }
@@ -437,9 +441,10 @@ export default function WorldExplorer() {
         spark.minAlpha = 0.5 * (1 / 255);
         spark.clipXY = 1.4;
         spark.maxStdDev = Math.sqrt(8);
-        spark.maxPixelRadius = 128;
+        spark.maxPixelRadius = 64;
         spark.defaultView.sort360 = false;
-        spark.defaultView.sortRadial = true;
+        spark.defaultView.sortRadial = false;
+        spark.defaultView.sort32 = true;
         spark.defaultView.stochastic = false;
         spark.needsUpdate = true;
         const configPayload = {
@@ -451,6 +456,7 @@ export default function WorldExplorer() {
           maxPixelRadius: spark.maxPixelRadius,
           sort360: spark.defaultView.sort360,
           sortRadial: spark.defaultView.sortRadial,
+          sort32: spark.defaultView.sort32,
           stochastic: spark.defaultView.stochastic,
           position: to3(spark.position),
         };
