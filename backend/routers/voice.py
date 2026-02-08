@@ -159,14 +159,16 @@ async def _poll_world_and_notify(
 ) -> None:
     """Background task: poll world generation status and notify frontend."""
     try:
-        world_data = await world_labs.poll_status(operation_id)
-        world_id = world_data.get("id", "")
-        splat_url = WorldLabsService.get_splat_url(world_data, resolution="500k")
+        operation_response = await world_labs.poll_status(operation_id)
+        world_id = WorldLabsService.extract_world_id(operation_response) or ""
+        world_data = await world_labs.get_world_assets(world_id) if world_id else operation_response
+        renderable_assets = WorldLabsService.extract_renderable_assets(world_data)
         await _send_json(ws, {
             "type": "world_status",
             "status": "ready",
             "worldId": world_id,
-            "splatUrl": splat_url,
+            "splatUrl": renderable_assets.get("default_spz_url"),
+            "worldAssets": renderable_assets,
         }, closed)
     except Exception as e:
         logger.error("World polling failed: %s", e)

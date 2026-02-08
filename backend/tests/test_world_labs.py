@@ -5,18 +5,18 @@ import pytest
 from services.world_labs import WorldLabsService
 
 
-# Sample response matching World Labs API schema (from TECHNICAL.md Section 6.3)
+# Sample response matching current World Labs API schema
 MOCK_WORLD_DATA = {
-    "id": "world_abc123",
+    "world_id": "world_abc123",
     "display_name": "QHacks World",
     "world_marble_url": "https://marble.worldlabs.ai/world/world_abc123",
     "assets": {
         "splats": {
-            "spz_urls": [
-                "https://cdn.worldlabs.ai/worlds/world_abc123/splats/100k.spz?sig=abc",
-                "https://cdn.worldlabs.ai/worlds/world_abc123/splats/500k.spz?sig=def",
-                "https://cdn.worldlabs.ai/worlds/world_abc123/splats/full.spz?sig=ghi",
-            ]
+            "spz_urls": {
+                "100k": "https://cdn.worldlabs.ai/worlds/world_abc123/splats/100k.spz?sig=abc",
+                "500k": "https://cdn.worldlabs.ai/worlds/world_abc123/splats/500k.spz?sig=def",
+                "full_res": "https://cdn.worldlabs.ai/worlds/world_abc123/splats/full.spz?sig=ghi",
+            }
         },
         "mesh": {
             "collider_mesh_url": "https://cdn.worldlabs.ai/worlds/world_abc123/mesh/collider.glb?sig=jkl"
@@ -61,7 +61,7 @@ def test_get_splat_url_100k():
 
 def test_get_splat_url_full():
     """Extract full resolution SPZ URL."""
-    url = WorldLabsService.get_splat_url(MOCK_WORLD_DATA, resolution="full")
+    url = WorldLabsService.get_splat_url(MOCK_WORLD_DATA, resolution="full_res")
     assert url is not None
     assert "full" in url
 
@@ -74,9 +74,27 @@ def test_get_splat_url_fallback():
     assert "full" in url
 
 
+def test_get_splat_url_from_legacy_list():
+    """Support legacy list format for spz_urls as fallback compatibility."""
+    legacy = {
+        "assets": {
+            "splats": {
+                "spz_urls": [
+                    "https://cdn.worldlabs.ai/worlds/world_abc123/splats/100k.spz?sig=abc",
+                    "https://cdn.worldlabs.ai/worlds/world_abc123/splats/500k.spz?sig=def",
+                    "https://cdn.worldlabs.ai/worlds/world_abc123/splats/full.spz?sig=ghi",
+                ]
+            }
+        }
+    }
+    url = WorldLabsService.get_splat_url(legacy, resolution="500k")
+    assert url is not None
+    assert "500k" in url
+
+
 def test_get_splat_url_empty_assets():
     """Handle world data with no SPZ URLs."""
-    empty_data = {"assets": {"splats": {"spz_urls": []}}}
+    empty_data = {"assets": {"splats": {"spz_urls": {}}}}
     url = WorldLabsService.get_splat_url(empty_data)
     assert url is None
 
@@ -96,7 +114,7 @@ def test_service_headers():
 
 def test_world_data_structure():
     """Verify mock data matches expected schema from TECHNICAL.md."""
-    assert "id" in MOCK_WORLD_DATA
+    assert "world_id" in MOCK_WORLD_DATA
     assert "display_name" in MOCK_WORLD_DATA
     assert "world_marble_url" in MOCK_WORLD_DATA
     assert "assets" in MOCK_WORLD_DATA
@@ -106,4 +124,4 @@ def test_world_data_structure():
     assert "imagery" in assets
     assert "caption" in assets
     assert "thumbnail_url" in assets
-    assert len(assets["splats"]["spz_urls"]) == 3  # 100k, 500k, full
+    assert len(assets["splats"]["spz_urls"]) == 3  # 100k, 500k, full_res

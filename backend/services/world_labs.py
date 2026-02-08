@@ -1,17 +1,13 @@
 """World Labs Marble API client.
 
 Handles 3D world generation, status polling, and asset retrieval.
-See TECHNICAL.md Section 6 for full API details.
-
-Auth: WLT-Api-Key header
-Base URL: https://api.worldlabs.ai/marble/v1
-Models: Marble 0.1-mini (~30-45s, 230 credits), Marble 0.1-plus (~5 min, 1580 credits)
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 import httpx
 
@@ -62,12 +58,7 @@ class WorldLabsService:
         """Poll until generation is done. Returns the world result dict."""
         async with httpx.AsyncClient(timeout=30) as client:
             for attempt in range(MAX_POLL_ATTEMPTS):
-                response = await client.get(
-                    f"{BASE_URL}/operations/{operation_id}",
-                    headers=self._headers,
-                )
-                response.raise_for_status()
-                data = response.json()
+                data = await self.fetch_operation(operation_id, client=client)
 
                 if data.get("done"):
                     if data.get("error"):
@@ -90,6 +81,29 @@ class WorldLabsService:
                 f"World generation timed out after {MAX_POLL_ATTEMPTS * POLL_INTERVAL_S}s"
             )
 
+    async def fetch_operation(
+        self,
+        operation_id: str,
+        *,
+        client: httpx.AsyncClient | None = None,
+    ) -> dict:
+        """Fetch operation status once."""
+        if client is not None:
+            response = await client.get(
+                f"{BASE_URL}/operations/{operation_id}",
+                headers=self._headers,
+            )
+            response.raise_for_status()
+            return response.json()
+
+        async with httpx.AsyncClient(timeout=30) as new_client:
+            response = await new_client.get(
+                f"{BASE_URL}/operations/{operation_id}",
+                headers=self._headers,
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def get_world_assets(self, world_id: str) -> dict:
         """Fetch world details including asset URLs."""
         async with httpx.AsyncClient(timeout=30) as client:
@@ -101,14 +115,88 @@ class WorldLabsService:
             return response.json()
 
     @staticmethod
-    def get_splat_url(world_data: dict, resolution: str = "500k") -> str | None:
-        """Extract the SPZ URL for a given resolution from world data.
+    def extract_world_id(world_data: dict[str, Any]) -> str | None:
+        """Extract world id from either world object or operation response payload."""
+        return (
+            world_data.get("world_id")
+            or world_data.get("id")
+            or world_data.get("response", {}).get("world_id")
+            or world_data.get("response", {}).get("id")
+        )
 
-        resolution: '100k' | '500k' | 'full'
+    @staticmethod
+    def extract_splat_urls(world_data: dict[str, Any]) -> dict[str, str]:
+        """Normalize splat URL formats from World Labs responses.
+
+        Official API currently returns:
+          assets.splats.spz_urls = { "100k": "...", "500k": "...", "full_res": "..." }
+        Older examples/docs used a list of URLs. We support both.
         """
-        urls = world_data.get("assets", {}).get("splats", {}).get("spz_urls", [])
-        for url in urls:
-            if resolution in url:
-                return url
-        # Fallback: return last URL (usually highest quality)
-        return urls[-1] if urls else None
+        raw = world_data.get("assets", {}).get("splats", {}).get("spz_urls")
+        if isinstance(raw, dict):
+            return {
+                str(key): str(value)
+                for key, value in raw.items()
+                if isinstance(value, str) and value
+            }
+
+        if isinstance(raw, list):
+            normalized: dict[str, str] = {}
+            for url in raw:
+                if not isinstance(url, str) or not url:
+                    continue
+                if "100k" in url:
+                    normalized["100k"] = url
+                elif "500k" in url:
+                    normalized["500k"] = url
+                elif "full" in url:
+                    normalized["full_res"] = url
+                else:
+                    normalized[str(len(normalized))] = url
+            return normalized
+
+        return {}
+
+    @staticmethod
+    def get_splat_url(world_data: dict[str, Any], resolution: str = "500k") -> str | None:
+        """Pick a splat URL from normalized assets by preferred resolution."""
+        urls = WorldLabsService.extract_splat_urls(world_data)
+        if not urls:
+            return None
+
+        if resolution in urls:
+            return urls[resolution]
+        if resolution == "full" and "full_res" in urls:
+            return urls["full_res"]
+        if resolution == "full_res" and "full" in urls:
+            return urls["full"]
+
+        for key in ("full_res", "500k", "100k", "full"):
+            if key in urls:
+                return urls[key]
+        return next(iter(urls.values()), None)
+
+    @staticmethod
+    def extract_renderable_assets(world_data: dict[str, Any]) -> dict[str, Any]:
+        """Extract asset URLs the frontend can render locally."""
+        assets = world_data.get("assets", {}) if isinstance(world_data, dict) else {}
+        splat_urls = WorldLabsService.extract_splat_urls(world_data)
+
+        mesh = assets.get("mesh", {}) if isinstance(assets, dict) else {}
+        imagery = assets.get("imagery", {}) if isinstance(assets, dict) else {}
+
+        return {
+            "spz_urls": splat_urls,
+            "default_spz_url": (
+                splat_urls.get("500k")
+                or splat_urls.get("100k")
+                or splat_urls.get("full_res")
+                or next(iter(splat_urls.values()), None)
+            ),
+            "collider_mesh_url": mesh.get("collider_mesh_url"),
+            "pano_url": imagery.get("pano_url"),
+            "thumbnail_url": assets.get("thumbnail_url"),
+            "caption": assets.get("caption"),
+            # Returned for traceability, but frontend must not redirect to it.
+            "world_marble_url": world_data.get("world_marble_url"),
+        }

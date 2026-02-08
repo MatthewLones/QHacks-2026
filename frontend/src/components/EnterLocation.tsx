@@ -8,15 +8,13 @@ interface EnterLocationProps {
 
 export default function EnterLocation({ onEnterPress }: EnterLocationProps) {
   const location = useAppStore((s) => s.location);
-  const requestConfirm = useAppStore((s) => s.requestConfirmExploration);
 
   const handlePointerDown = useCallback(
     (e: React.PointerEvent<HTMLButtonElement>) => {
       if (e.button !== 0) return;
-      requestConfirm();       // Tell voice backend user wants to explore
       onEnterPress?.();       // Trigger hyperspace warp animation
     },
-    [requestConfirm, onEnterPress],
+    [onEnterPress],
   );
 
   if (!location) return null;
