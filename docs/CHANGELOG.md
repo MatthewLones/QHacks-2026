@@ -6,6 +6,88 @@ Each entry includes what changed, why it was changed, and which files were affec
 
 ---
 
+## [Session 11] - 2026-02-07 18:30
+
+### Added
+- **Deezer music integration (replacing Spotify)** — Spotify developer dashboard not accepting new apps, so replaced entire Spotify stack with Deezer. Deezer's `GET /search` API requires zero authentication and returns 30-second MP3 preview URLs that HTML5 Audio plays directly. Net effect: ~540 lines deleted, ~50 lines added.
+  - `backend/services/deezer_service.py` — New stateless service: `search_tracks(query, limit)` → `[{preview_url, title, artist, album_art}]`
+  - `backend/services/spotify_service.py` — DELETED
+  - `backend/routers/spotify.py` — DELETED
+  - `frontend/src/audio/SpotifyService.ts` — DELETED
+  - `frontend/src/components/SpotifyConnect.tsx` — DELETED
+  - `backend/main.py` — Removed Spotify router import/mount
+  - `backend/config.py` — Removed `SPOTIFY_CLIENT_ID/SECRET/REDIRECT_URI`
+  - `frontend/src/store.ts` — Removed `spotifyConnected` state
+
+- **Song suggestion system for Deezer** — Instead of genre-style search queries (which often returned 0 Deezer results), Gemini now picks 5 real song names with artists (e.g. "Take Five - Dave Brubeck", "Clair de Lune - Debussy") that fit the era/region/mood. Backend iterates through the list until Deezer finds a match. Verified: Deezer has full mainstream catalog (Queen, Debussy, Brubeck, etc.).
+  - `backend/services/gemini_guide.py` — `_SELECT_MUSIC` tool: replaced `search_query` (STRING) with `song_suggestions` (ARRAY of 5 strings)
+  - `backend/routers/voice.py` — `select_music` handler: iterates `song_suggestions`, searches Deezer for each until match, falls back to local tracks
+
+- **Music fade transition** — When user confirms exploration, ambient globe music fades out to silence (2s). Brief silence gap. Then Deezer era-specific track fades in from silence (2s). Creates a clean audio transition instead of abrupt crossfade.
+  - `frontend/src/App.tsx` — Added `musicService.stop(2000)` in `confirmRequested` effect
+  - `frontend/src/hooks/useVoiceConnection.ts` — Changed music handler from `crossfadeTo` to `play` with `fadeInMs: 2000`
+
+- **TTS-aware music queueing** — Music no longer cuts off AI mid-sentence. When Deezer track arrives while TTS is still playing buffered audio, music waits (polls every 200ms) until TTS drains, then fades in. AI finishes naturally, brief silence, then music.
+  - `frontend/src/audio/VoiceConnection.ts` — Added `isTTSPlaying` public getter exposing `AudioPlaybackService.isPlaying`
+  - `frontend/src/hooks/useVoiceConnection.ts` — Music handler polls `vc.isTTSPlaying` before starting playback
+
+- **Downloaded royalty-free ambient music tracks** — Sourced and downloaded tracks for the local music fallback library
+  - `frontend/public/music/ambient-globe.mp3` — Ambient background for globe phase
+  - `frontend/public/music/ancient-mediterranean.mp3`
+  - `frontend/public/music/ancient-egypt.mp3`
+  - `frontend/public/music/medieval-europe.mp3`
+  - `frontend/public/music/modern-cinematic.mp3`
+  - `frontend/public/music/dramatic-epic.mp3`
+
+- **AI-generated loading messages** — Backend sends 15 personalized loading messages via `generate_loading_messages` tool call. Frontend displays them rotating every 4 seconds. Simple "Preparing your journey" placeholder until AI messages arrive.
+  - `backend/services/gemini_guide.py` — Added `_GENERATE_LOADING_MESSAGES` tool declaration
+  - `backend/routers/voice.py` — Added `generate_loading_messages` handler
+  - `frontend/src/components/LoadingOverlay.tsx` — Displays rotating messages, 4s interval
+
+- **Subtitle sync system** — Word-level timestamps from TTS enable synced subtitle reveal. Frontend tracks `wordTimestamps` and `subtitleAudioStartTime` to reveal words in time with audio playback.
+  - `frontend/src/audio/VoiceConnection.ts` — Emits `wordTimestamp` and `audioPlaybackStart` events
+  - `frontend/src/hooks/useVoiceConnection.ts` — Wires events to store (`addWordTimestamp`, `markSubtitleAudioStart`)
+
+### Fixed
+- **Disconnect race condition on confirm** — `transitionComplete` effect checked `phase === 'globe'` but phase was already `'loading'` (set by `handleJumpComplete`), so voice never disconnected. Removed the phase check — disconnect fires on `transitionComplete` regardless of phase.
+  - `frontend/src/App.tsx`
+
+- **Gemini not calling tools during transition** — With default `mode=AUTO`, Gemini could skip tool calls (summarize_session, loading_messages, select_music) and just generate text. Added `tool_config` with `FunctionCallingConfig(mode="ANY")` for transition phase, forcing at least one tool call.
+  - `backend/services/gemini_guide.py` — `_build_config()` sets `mode="ANY"` when `phase == "transition"`
+
+- **37-second TTS narration blocking transition** — After transition tool calls, the follow-up Gemini loop generated a massive narration in round 2. Then entire decision changed: no voice response should happen during transition at all. Two fixes: (1) break after first Gemini round in transition phase, (2) skip TTS stream creation entirely during transition (`is_transition` flag), (3) discard all text chunks during transition.
+  - `backend/routers/voice.py` — `is_transition` flag skips TTS creation, discards text chunks, breaks after first round
+
+- **Deezer search returning 0 results** — Two layered issues: (1) `search_query` was optional in tool declaration — Gemini skipped it with `mode=ANY`. Fixed by adding to `required` list. (2) Gemini generated overly specific queries like "1930s New York city bustling orchestral jazz instrumental" which returned 0 Deezer results. Fixed with progressive query simplification retry loop, then replaced entirely with song suggestions approach.
+  - `backend/services/gemini_guide.py` — Made `search_query` required, then replaced with `song_suggestions`
+  - `backend/routers/voice.py` — Progressive simplification, then replaced with song iteration
+
+- **Stars jumping/jittering on state changes** — tsParticles `Particles` component re-rendered on every parent state change (keypresses in LandingWarp, voice state in App), causing particle positions to reset. Three fixes: (1) Removed `density: { enable: true }` from particle options (prevented recalculation on resize), (2) Wrapped `GlobeStarfield` in `React.memo` (prevents re-renders from App state), (3) Extracted `StableStarfield` memoized sub-component from `LandingWarp` (prevents re-renders from keypress state).
+  - `frontend/src/components/starfieldOptions.ts` — Removed `density: { enable: true }`
+  - `frontend/src/components/GlobeStarfield.tsx` — Wrapped export with `memo()`
+  - `frontend/src/components/landing/LandingWarp.tsx` — Extracted `StableStarfield = memo(...)` component outside parent
+
+- **Loading overlay showing "Gathering supplies for..."** — User explicitly didn't want this fallback text. Removed `fallbackPhrases()` function entirely. Simple "Preparing your journey" placeholder until AI-generated messages arrive. Reduced rotation interval from 7s to 4s.
+  - `frontend/src/components/LoadingOverlay.tsx`
+
+### Changed
+- **MusicService error logging** — Added `audio.onerror` handler and success log on crossfade play for debugging Deezer preview URL issues
+  - `frontend/src/audio/MusicService.ts`
+
+- **VoiceConnection MusicMessage type** — Changed source union from `"local" | "spotify"` to `"local" | "deezer"`, removed `spotifyUri` field
+  - `frontend/src/audio/VoiceConnection.ts`
+
+- **Confirm exploration prompt** — Updated system instruction: removed spoken goodbye request, added `song_suggestions` format description, emphasized "Do NOT generate any text outside of tool calls"
+  - `backend/routers/voice.py`
+
+### Notes
+- Deezer free API returns full mainstream catalog (Queen, Dave Brubeck, Debussy all confirmed). 30-second MP3 previews play via HTML5 `new Audio(url)` with no auth.
+- `mode=ANY` in Gemini tool_config forces tool calls but suppresses text output — this is the desired behavior for transition phase (tools only, no speech).
+- The `is_transition` flag approach for skipping TTS reduced transition time from ~37s to ~3-5s.
+- Stars fix required both memoization (prevent re-renders) AND density removal (prevent recalculation). Either alone was insufficient.
+
+---
+
 ## [Session 10] - 2026-02-07 17:15
 
 ### Fixed
