@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Globe from './components/Globe';
 import LocationCard from './components/LocationCard';
 import GlobeControls from './components/GlobeControls';
-import VersionBadge from './components/VersionBadge';
 import TimeWheelSelector from './components/TimeWheelSelector';
 import TravelTo from './components/TravelTo';
 import GlobeStarfield from './components/GlobeStarfield';
@@ -297,7 +296,6 @@ function App() {
       {/* UI controls — only when globe is idle (not warping) */}
       {showGlobeUI && (
         <>
-          <VersionBadge />
           <GlobeControls />
           <TimeWheelSelector onEnterPress={handleEnterButtonPress} />
           <TravelTo />
