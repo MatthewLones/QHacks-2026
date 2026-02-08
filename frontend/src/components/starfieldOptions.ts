@@ -15,7 +15,7 @@ export const landingStarfieldOptions: ISourceOptions = {
   particles: {
     /* Mix of pure white + faint blue-tinted stars for depth */
     color: { value: ['#ffffff', '#e8eaff', '#cdd4ff', '#ffffff', '#ffffff'] },
-    number: { value: 380, density: { enable: true } },
+    number: { value: 380 },
     opacity: {
       value: { min: 0.1, max: 0.9 },
       animation: { enable: true, speed: 0.6, sync: false },

@@ -215,18 +215,20 @@ _SELECT_MUSIC = types.FunctionDeclaration(
                 description="Mood of the music",
                 enum=["contemplative", "majestic", "adventurous", "peaceful", "dramatic"],
             ),
-            "search_query": types.Schema(
-                type="STRING",
+            "song_suggestions": types.Schema(
+                type="ARRAY",
+                items=types.Schema(type="STRING"),
                 description=(
-                    "A SHORT music search query (2-4 words max) to find a matching track. "
-                    "Keep it simple — the search engine works best with brief genre+style queries. "
-                    "Examples: 'jazz instrumental', 'ancient lyre music', 'throat singing', "
-                    "'lute medieval', 'classical piano', 'sitar raga'. "
-                    "Do NOT include dates, cities, or long descriptions."
+                    "A list of 5 real song names (with artist) to search for on a music "
+                    "streaming service. Pick songs that genuinely fit the era, region, and "
+                    "mood — any genre, any era, famous or obscure. Format each entry as "
+                    "'Song Title - Artist'. Examples: 'Clair de Lune - Debussy', "
+                    "'Take Five - Dave Brubeck', 'Sakura - Traditional Japanese'. "
+                    "The system will try each in order until one is found."
                 ),
             ),
         },
-        required=["era", "region", "mood", "search_query"],
+        required=["era", "region", "mood", "song_suggestions"],
     ),
 )
 

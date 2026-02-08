@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import Particles, { initParticlesEngine } from '@tsparticles/react';
 import { loadSlim } from '@tsparticles/slim';
 import { landingStarfieldOptions } from './starfieldOptions';
@@ -8,7 +8,7 @@ interface GlobeStarfieldProps {
   visible?: boolean;
 }
 
-export default function GlobeStarfield({ visible = true }: GlobeStarfieldProps) {
+export default memo(function GlobeStarfield({ visible = true }: GlobeStarfieldProps) {
   const [engineReady, setEngineReady] = useState(false);
   const initDone = useRef(false);
 
@@ -27,4 +27,4 @@ export default function GlobeStarfield({ visible = true }: GlobeStarfieldProps) 
       <Particles id="globe-starfield" options={landingStarfieldOptions} />
     </div>
   );
-}
+});

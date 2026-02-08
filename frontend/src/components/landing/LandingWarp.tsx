@@ -13,12 +13,29 @@
      • prefers-reduced-motion: skips collapse/warp, quick fade only
    ================================================================ */
 
-import { useRef, useState, useEffect, useCallback } from 'react';
+import { memo, useRef, useState, useEffect, useCallback } from 'react';
 import Particles, { initParticlesEngine } from '@tsparticles/react';
 import { loadSlim } from '@tsparticles/slim';
 import type { Container } from '@tsparticles/engine';
 import { landingStarfieldOptions } from '../starfieldOptions';
 import './LandingWarp.css';
+
+/* Memoized starfield — prevents tsParticles from refreshing when
+   LandingWarp re-renders (e.g. on every keypress). Defined outside
+   the parent component so React never recreates it. */
+const StableStarfield = memo(function StableStarfield({
+  onLoaded,
+}: {
+  onLoaded: (container?: Container) => Promise<void>;
+}) {
+  return (
+    <Particles
+      id="lw-starfield"
+      particlesLoaded={onLoaded}
+      options={landingStarfieldOptions}
+    />
+  );
+});
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
@@ -100,9 +117,6 @@ export default function LandingWarp({ onComplete, initialYear }: LandingWarpProp
       await loadSlim(engine);
     }).then(() => setEngineReady(true));
   }, []);
-
-  /* ----- Idle starfield options (memo'd, never rebuilt during anim) ----- */
-  const particleOptions = landingStarfieldOptions;
 
   /* ----- Particle container loaded callback ----- */
   const particlesLoaded = useCallback(async (container?: Container) => {
@@ -317,13 +331,7 @@ export default function LandingWarp({ onComplete, initialYear }: LandingWarpProp
     >
       {/* ---- Starfield (tsParticles canvas) ---- */}
       <div ref={starsRef} className="lw-stars">
-        {engineReady && (
-          <Particles
-            id="lw-starfield"
-            particlesLoaded={particlesLoaded}
-            options={particleOptions}
-          />
-        )}
+        {engineReady && <StableStarfield onLoaded={particlesLoaded} />}
       </div>
 
       {/* ---- Edge vignette (rAF-driven opacity) ---- */}

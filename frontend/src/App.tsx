@@ -125,6 +125,8 @@ function App() {
     if (confirmRequested && voice.status === 'connected') {
       voice.sendConfirmExploration();
       clearConfirm();
+      // Fade out ambient music — Deezer track will fade in from silence later
+      musicService.stop(2000);
     }
   }, [confirmRequested, voice.status, voice.sendConfirmExploration, clearConfirm]);
 

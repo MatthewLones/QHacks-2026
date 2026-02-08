@@ -97,14 +97,27 @@ export function useVoiceConnection(): VoiceState {
       useAppStore.getState().setTransitionComplete(true);
     });
 
-    // Era-specific music from backend — crossfade from ambient to era track
-    // Both deezer (preview URL) and local sources provide a trackUrl
+    // Era-specific music from backend — ambient already faded out on confirm,
+    // so just fade in the new track from silence. Wait for any TTS audio to
+    // finish draining first so music doesn't cut off the AI mid-sentence.
     vc.on("music", (msg: MusicMessage) => {
       if (msg.trackUrl) {
-        useAppStore.getState().setCurrentTrack(msg.trackUrl);
-        useAppStore.getState().setMusicPlaying(true);
-        musicService.crossfadeTo(msg.trackUrl, 2000);
-        console.log(`[MUSIC] ${msg.source}: ${msg.trackName ?? msg.trackUrl} by ${msg.artist ?? "unknown"}`);
+        const url = msg.trackUrl;
+        const startMusic = () => {
+          useAppStore.getState().setCurrentTrack(url);
+          useAppStore.getState().setMusicPlaying(true);
+          musicService.play(url, { loop: true, fadeInMs: 2000 });
+          console.log(`[MUSIC] ${msg.source}: ${msg.trackName ?? url} by ${msg.artist ?? "unknown"}`);
+        };
+        // Poll until TTS playback finishes, then start music
+        const waitForTTS = () => {
+          if (vc.isTTSPlaying) {
+            setTimeout(waitForTTS, 200);
+          } else {
+            startMusic();
+          }
+        };
+        waitForTTS();
       }
     });
 

@@ -117,28 +117,20 @@ async def _handle_function_call(
 
     elif name == "select_music":
         # Try Deezer first (no auth needed), fall back to downloaded tracks
-        search_query = args.get("search_query", "")
-        print(f"[{_ts()}][FUNC] select_music: era={args.get('era')} region={args.get('region')} mood={args.get('mood')} search_query='{search_query}'")
+        song_suggestions = args.get("song_suggestions", [])
+        print(f"[{_ts()}][FUNC] select_music: era={args.get('era')} region={args.get('region')} mood={args.get('mood')} songs={song_suggestions}")
         deezer_track = None
-        if search_query:
-            # Progressively simplify query until Deezer returns results:
-            # "1930s New York jazz big band" → "1930s New York jazz" → "1930s New York" → "jazz" (era keyword)
-            words = search_query.split()
-            queries = [search_query]
-            for n in (3, 2):
-                if len(words) > n:
-                    queries.append(" ".join(words[:n]))
-            # Last resort: use the era/mood as a simple genre query
-            queries.append(f"{args.get('era', '')} {args.get('mood', '')} music".strip())
+        if song_suggestions:
             try:
-                for q in queries:
-                    results = await deezer.search_tracks(q, limit=3)
+                for song in song_suggestions:
+                    results = await deezer.search_tracks(song, limit=3)
                     if results:
                         deezer_track = results[0]
+                        print(f"[{_ts()}][FUNC] Deezer: found '{deezer_track['title']}' for query '{song}'")
                         break
-                    print(f"[{_ts()}][FUNC] Deezer: 0 results for '{q}', simplifying...")
+                    print(f"[{_ts()}][FUNC] Deezer: 0 results for '{song}', trying next...")
                 if not deezer_track:
-                    print(f"[{_ts()}][FUNC] Deezer returned 0 results for all query variants")
+                    print(f"[{_ts()}][FUNC] Deezer: 0 results for all {len(song_suggestions)} song suggestions")
             except Exception as e:
                 print(f"[{_ts()}][FUNC] Deezer search failed: {e} — falling back to local")
 
@@ -625,8 +617,8 @@ async def voice_ws(websocket: WebSocket):
                             "   - generate_loading_messages: 15 short, cute loading messages "
                             "personalized to the user and destination (no periods, start with -ing verbs)\n"
                             "   - select_music: choose music matching the era, region, and mood. "
-                            "Include a creative search_query for music search (e.g. 'ancient Roman lyre "
-                            "instrumental' or '1920s Parisian jazz cafe').\n"
+                            "Include song_suggestions — a list of 5 real song names (with artist) that "
+                            "fit the destination. Format: 'Song Title - Artist'.\n"
                             "Do NOT generate any text outside of tool calls.]"
                         ))]
                     )

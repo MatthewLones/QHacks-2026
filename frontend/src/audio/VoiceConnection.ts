@@ -67,6 +67,11 @@ export class VoiceConnection {
     return this._status;
   }
 
+  /** Whether TTS audio is currently playing (buffered chunks still draining). */
+  get isTTSPlaying(): boolean {
+    return this.playback.isPlaying;
+  }
+
   async connect(): Promise<void> {
     if (this.ws) return;
 
