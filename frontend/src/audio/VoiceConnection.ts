@@ -27,15 +27,24 @@ export type VoiceEventMap = {
     worldId?: string,
     splatUrl?: string,
   ) => void;
-  music: (trackUrl: string) => void;
+  music: (msg: MusicMessage) => void;
   suggestedLocation: (lat: number, lng: number, name: string, year?: number) => void;
   sessionSummary: (userProfile: string, worldDescription: string) => void;
+  loadingMessages: (messages: string[]) => void;
+  transitionComplete: () => void;
   wordTimestamp: (text: string, startS: number, stopS: number) => void;
   audioPlaybackStart: () => void;
   responseStart: () => void;
   status: (status: ConnectionStatus) => void;
   micLevel: (rms: number) => void;
 };
+
+export interface MusicMessage {
+  source: "local" | "deezer";
+  trackUrl?: string;
+  trackName?: string;
+  artist?: string;
+}
 
 type Listener = (...args: never[]) => void;
 
@@ -299,10 +308,17 @@ export class VoiceConnection {
         );
         break;
 
-      case "music":
-        console.log(`[BE→VC] #${msgCount} MUSIC: ${msg.trackUrl}`);
-        this.emit("music", msg.trackUrl as string);
+      case "music": {
+        const source = (msg.source as string) || "local";
+        console.log(`[BE→VC] #${msgCount} MUSIC: source=${source} trackUrl=${msg.trackUrl}`);
+        this.emit("music", {
+          source: source as "local" | "deezer",
+          trackUrl: msg.trackUrl as string | undefined,
+          trackName: msg.trackName as string | undefined,
+          artist: msg.artist as string | undefined,
+        });
         break;
+      }
 
       case "suggested_location":
         console.log(
@@ -326,6 +342,18 @@ export class VoiceConnection {
           msg.userProfile as string,
           msg.worldDescription as string,
         );
+        break;
+
+      case "loading_messages":
+        console.log(
+          `[BE→VC] #${msgCount} LOADING_MESSAGES: ${(msg.messages as string[]).length} messages`,
+        );
+        this.emit("loadingMessages", msg.messages as string[]);
+        break;
+
+      case "transition_complete":
+        console.log(`[BE→VC] #${msgCount} TRANSITION_COMPLETE`);
+        this.emit("transitionComplete");
         break;
 
       case "word_timestamp": {

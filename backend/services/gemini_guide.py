@@ -131,11 +131,21 @@ _SUMMARIZE_SESSION = types.FunctionDeclaration(
     name="summarize_session",
     description=(
         "Called when the user confirms they want to explore a location. "
-        "Generate a user profile summary and a vivid scene description for 3D world generation."
+        "Generate a brief goodbye, a user profile summary, and a vivid scene description "
+        "for 3D world generation."
     ),
     parameters=types.Schema(
         type="OBJECT",
         properties={
+            "goodbye_text": types.Schema(
+                type="STRING",
+                description=(
+                    "A warm, brief goodbye to the user (1-2 sentences). Reference something "
+                    "personal you learned about them if possible. This text will be spoken "
+                    "aloud by TTS. Example: 'What a wonderful choice! Get ready for the "
+                    "sights and sounds of 1930s New York.'"
+                ),
+            ),
             "user_profile": types.Schema(
                 type="STRING",
                 description=(
@@ -146,14 +156,77 @@ _SUMMARIZE_SESSION = types.FunctionDeclaration(
             "world_description": types.Schema(
                 type="STRING",
                 description=(
-                    "Rich, vivid visual description of the chosen location and time period "
-                    "for 3D world generation. Describe the scene: architecture, landscape, "
-                    "lighting, atmosphere, people, sensory details. Write as if describing "
-                    "a painting or film scene. 3-5 sentences."
+                    "Extremely detailed, vivid visual description of the chosen location "
+                    "and time period for 3D world generation. This text is the ONLY input "
+                    "to the 3D generation model, so be as specific as possible. Describe: "
+                    "the exact architectural style and key structures, materials (stone, "
+                    "wood, marble), the landscape and terrain, sky conditions and lighting "
+                    "(time of day, weather), vegetation and natural features, the color "
+                    "palette, atmospheric effects (fog, dust, golden light), people's "
+                    "clothing and activities, street-level details (market stalls, carts, "
+                    "signs), and sensory textures. Write as if directing a film set "
+                    "designer. 8-12 detailed sentences."
                 ),
             ),
         },
-        required=["user_profile", "world_description"],
+        required=["goodbye_text", "user_profile", "world_description"],
+    ),
+)
+
+
+_GENERATE_LOADING_MESSAGES = types.FunctionDeclaration(
+    name="generate_loading_messages",
+    description=(
+        "Generate 15 short, cute loading screen messages personalized to the user's "
+        "interests and their chosen destination. These will be displayed one at a time "
+        "during the loading animation while the 3D world generates."
+    ),
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "messages": types.Schema(
+                type="ARRAY",
+                items=types.Schema(type="STRING"),
+                description=(
+                    "Array of 15 short loading messages. Each message should be a playful, "
+                    "present-participle action phrase (starting with an -ing verb) that is "
+                    "historically or culturally plausible for the destination. Do NOT end "
+                    "with a period. Personalize to the user's interests when possible. "
+                    "Examples: 'Preparing letters from Napoleon's correspondence', "
+                    "'Checking out the latest prints from the Renaissance', "
+                    "'Packing your favorite astronomy books for the journey'"
+                ),
+            ),
+        },
+        required=["messages"],
+    ),
+)
+
+_SELECT_MUSIC = types.FunctionDeclaration(
+    name="select_music",
+    description="Select background music that fits the era, region, and mood",
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "era": types.Schema(type="STRING", description="Historical era"),
+            "region": types.Schema(type="STRING", description="Geographic region"),
+            "mood": types.Schema(
+                type="STRING",
+                description="Mood of the music",
+                enum=["contemplative", "majestic", "adventurous", "peaceful", "dramatic"],
+            ),
+            "search_query": types.Schema(
+                type="STRING",
+                description=(
+                    "A SHORT music search query (2-4 words max) to find a matching track. "
+                    "Keep it simple — the search engine works best with brief genre+style queries. "
+                    "Examples: 'jazz instrumental', 'ancient lyre music', 'throat singing', "
+                    "'lute medieval', 'classical piano', 'sitar raga'. "
+                    "Do NOT include dates, cities, or long descriptions."
+                ),
+            ),
+        },
+        required=["era", "region", "mood", "search_query"],
     ),
 )
 
@@ -161,6 +234,11 @@ _SUMMARIZE_SESSION = types.FunctionDeclaration(
 def _build_phase1_tools() -> list[types.FunctionDeclaration]:
     """Phase 1 (globe selection): suggest locations + summarize on exit."""
     return [_SUGGEST_LOCATION, _SUMMARIZE_SESSION]
+
+
+def _build_transition_tools() -> list[types.FunctionDeclaration]:
+    """Transition phase (confirm exploration): goodbye + summary + loading messages + music."""
+    return [_SUMMARIZE_SESSION, _GENERATE_LOADING_MESSAGES, _SELECT_MUSIC]
 
 
 def _build_exploration_tools() -> list[types.FunctionDeclaration]:
@@ -182,23 +260,7 @@ def _build_exploration_tools() -> list[types.FunctionDeclaration]:
                 required=["location", "time_period", "scene_description"],
             ),
         ),
-        types.FunctionDeclaration(
-            name="select_music",
-            description="Select background music that fits the era, region, and mood",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={
-                    "era": types.Schema(type="STRING", description="Historical era"),
-                    "region": types.Schema(type="STRING", description="Geographic region"),
-                    "mood": types.Schema(
-                        type="STRING",
-                        description="Mood of the music",
-                        enum=["contemplative", "majestic", "adventurous", "peaceful", "dramatic"],
-                    ),
-                },
-                required=["era", "region", "mood"],
-            ),
-        ),
+        _SELECT_MUSIC,
         types.FunctionDeclaration(
             name="generate_fact",
             description="Generate a historical fact to display as an overlay card",
@@ -243,15 +305,29 @@ class GeminiGuide:
 
     def _build_config(self) -> types.GenerateContentConfig:
         phase = self.context.get("phase", "globe_selection")
-        if phase == "globe_selection":
+        if phase == "transition":
+            # Transition: keep Phase 1 prompt for conversation context continuity
+            prompt = PHASE1_GLOBE_PROMPT.format(**self.context)
+            tools = _build_transition_tools()
+        elif phase == "globe_selection":
             prompt = PHASE1_GLOBE_PROMPT.format(**self.context)
             tools = _build_phase1_tools()
         else:
             prompt = GUIDE_SYSTEM_PROMPT.format(**self.context)
             tools = _build_exploration_tools()
+
+        # During transition, force Gemini to call tools (summarize_session,
+        # generate_loading_messages, select_music) rather than just speaking.
+        tool_config = None
+        if phase == "transition":
+            tool_config = types.ToolConfig(
+                function_calling_config=types.FunctionCallingConfig(mode="ANY")
+            )
+
         return types.GenerateContentConfig(
             system_instruction=prompt,
             tools=[types.Tool(function_declarations=tools)],
+            tool_config=tool_config,
         )
 
     async def generate_response(

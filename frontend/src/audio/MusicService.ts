@@ -68,12 +68,17 @@ class MusicService {
     audio.volume = 0;
     this.current = audio;
 
+    audio.onerror = () => {
+      console.error("[Music] Crossfade audio load error:", audio.error?.message, "src:", url.slice(0, 80));
+    };
+
     const fadingOut = this.fading;
     const fadingOutStartVol = fadingOut?.volume ?? 0;
     const steps = Math.max(1, Math.floor(durationMs / FADE_INTERVAL_MS));
     let step = 0;
 
     audio.play().then(() => {
+      console.log("[Music] Crossfade playing:", url.slice(0, 80));
       this.fadeTimer = window.setInterval(() => {
         step++;
         const progress = Math.min(1, step / steps);

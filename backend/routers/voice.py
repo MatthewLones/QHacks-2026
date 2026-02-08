@@ -27,6 +27,7 @@ from google.genai import types
 from services.gemini_guide import GeminiGuide
 from services.world_labs import WorldLabsService
 from services.music_selector import select_track
+from services.deezer_service import DeezerService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -90,6 +91,7 @@ async def _handle_function_call(
     ws: WebSocket,
     gemini: GeminiGuide,
     world_labs: WorldLabsService,
+    deezer: DeezerService,
     closed: asyncio.Event,
 ) -> None:
     """Execute a Gemini function call and send results to frontend."""
@@ -114,12 +116,52 @@ async def _handle_function_call(
             gemini.add_function_result(name, {"status": "error", "error": str(e)})
 
     elif name == "select_music":
-        track = select_track(era=args["era"], region=args["region"], mood=args["mood"])
-        if track:
-            await _send_json(ws, {"type": "music", "trackUrl": track["file"]}, closed)
-            gemini.add_function_result(name, {"status": "playing", "track": track["title"]})
+        # Try Deezer first (no auth needed), fall back to downloaded tracks
+        search_query = args.get("search_query", "")
+        print(f"[{_ts()}][FUNC] select_music: era={args.get('era')} region={args.get('region')} mood={args.get('mood')} search_query='{search_query}'")
+        deezer_track = None
+        if search_query:
+            # Progressively simplify query until Deezer returns results:
+            # "1930s New York jazz big band" → "1930s New York jazz" → "1930s New York" → "jazz" (era keyword)
+            words = search_query.split()
+            queries = [search_query]
+            for n in (3, 2):
+                if len(words) > n:
+                    queries.append(" ".join(words[:n]))
+            # Last resort: use the era/mood as a simple genre query
+            queries.append(f"{args.get('era', '')} {args.get('mood', '')} music".strip())
+            try:
+                for q in queries:
+                    results = await deezer.search_tracks(q, limit=3)
+                    if results:
+                        deezer_track = results[0]
+                        break
+                    print(f"[{_ts()}][FUNC] Deezer: 0 results for '{q}', simplifying...")
+                if not deezer_track:
+                    print(f"[{_ts()}][FUNC] Deezer returned 0 results for all query variants")
+            except Exception as e:
+                print(f"[{_ts()}][FUNC] Deezer search failed: {e} — falling back to local")
+
+        if deezer_track:
+            print(f"[{_ts()}][FUNC] Playing Deezer: \"{deezer_track['title']}\" by {deezer_track['artist']}")
+            await _send_json(ws, {
+                "type": "music",
+                "source": "deezer",
+                "trackUrl": deezer_track["preview_url"],
+                "trackName": deezer_track["title"],
+                "artist": deezer_track["artist"],
+            }, closed)
+            gemini.add_function_result(name, {"status": "playing_deezer", "track": deezer_track["title"]})
         else:
-            gemini.add_function_result(name, {"status": "no_track_found"})
+            # Fallback to downloaded tracks
+            track = select_track(era=args["era"], region=args["region"], mood=args["mood"])
+            if track:
+                print(f"[{_ts()}][FUNC] Playing local fallback: \"{track['title']}\"")
+                await _send_json(ws, {"type": "music", "source": "local", "trackUrl": track["file"]}, closed)
+                gemini.add_function_result(name, {"status": "playing_local", "track": track["title"]})
+            else:
+                print(f"[{_ts()}][FUNC] No music found (Deezer + local both empty)")
+                gemini.add_function_result(name, {"status": "no_track_found"})
 
     elif name == "generate_fact":
         await _send_json(ws, {
@@ -149,6 +191,15 @@ async def _handle_function_call(
             "worldDescription": args["world_description"],
         }, closed)
         gemini.add_function_result(name, {"status": "session_saved"})
+
+    elif name == "generate_loading_messages":
+        messages = args.get("messages", [])
+        print(f"[{_ts()}][FUNC] Loading messages generated: {len(messages)} messages")
+        await _send_json(ws, {
+            "type": "loading_messages",
+            "messages": messages,
+        }, closed)
+        gemini.add_function_result(name, {"status": "messages_sent", "count": len(messages)})
 
     else:
         print(f"[{_ts()}][FUNC] Unknown function call: {name}")
@@ -180,6 +231,7 @@ async def _process_gemini_response(
     gradium: GradiumService,
     world_labs: WorldLabsService,
     closed: asyncio.Event,
+    deezer: DeezerService | None = None,
 ) -> None:
     """Send user text to Gemini, stream response text to TTS and frontend.
 
@@ -200,24 +252,31 @@ async def _process_gemini_response(
     # drop stale audio from previous (cancelled) responses still in-flight.
     await _send_json(ws, {"type": "response_start", "responseId": response_id}, closed)
 
+    is_transition = gemini.context.get("phase") == "transition"
+
     try:
-        # Try to create TTS stream with retry for concurrency limits.
-        # Gradium has a 2-session limit; closed sessions take a moment to free.
-        for _tts_attempt in range(3):
-            try:
-                tts_stream = await gradium.create_tts_stream()
-                print(f"[{_ts()}][TTS] Stream created OK for {response_id}")
-                break
-            except ConnectionError as e:
-                if "Concurrencylimit" in str(e) and _tts_attempt < 2:
-                    print(f"[{_ts()}][TTS] Concurrency limit, retry {_tts_attempt + 1}/3 in 3s...")
-                    await asyncio.sleep(3)
-                else:
+        # Skip TTS entirely during transition — no voice response needed,
+        # just tool calls (summarize_session, loading_messages, select_music).
+        if is_transition:
+            print(f"[{_ts()}][TTS] Skipping TTS for transition phase (tools only)")
+        else:
+            # Try to create TTS stream with retry for concurrency limits.
+            # Gradium has a 2-session limit; closed sessions take a moment to free.
+            for _tts_attempt in range(3):
+                try:
+                    tts_stream = await gradium.create_tts_stream()
+                    print(f"[{_ts()}][TTS] Stream created OK for {response_id}")
+                    break
+                except ConnectionError as e:
+                    if "Concurrencylimit" in str(e) and _tts_attempt < 2:
+                        print(f"[{_ts()}][TTS] Concurrency limit, retry {_tts_attempt + 1}/3 in 3s...")
+                        await asyncio.sleep(3)
+                    else:
+                        print(f"[{_ts()}][TTS] UNAVAILABLE ({e}), text-only fallback")
+                        break
+                except Exception as e:
                     print(f"[{_ts()}][TTS] UNAVAILABLE ({e}), text-only fallback")
                     break
-            except Exception as e:
-                print(f"[{_ts()}][TTS] UNAVAILABLE ({e}), text-only fallback")
-                break
 
         # If TTS is available, start forwarding audio to frontend
         if tts_stream:
@@ -260,6 +319,9 @@ async def _process_gemini_response(
                     text_piece = chunk["text"]
                     full_response_text += text_piece
                     gemini_chunk_count += 1
+                    # During transition, discard text — no voice response needed
+                    if is_transition:
+                        continue
                     print(f"[{_ts()}][GEMINI] Chunk #{gemini_chunk_count}: \"{text_piece}\"")
                     await _send_json(ws, {"type": "guide_text", "text": text_piece, "responseId": response_id}, closed)
                     if tts_stream:
@@ -270,10 +332,16 @@ async def _process_gemini_response(
                 elif chunk["type"] == "function_call":
                     print(f"[{_ts()}][GEMINI] Function call: {chunk['name']}")
                     function_calls_this_round.append(chunk)
-                    await _handle_function_call(chunk, ws, gemini, world_labs, closed)
+                    await _handle_function_call(chunk, ws, gemini, world_labs, deezer, closed)
 
             if not function_calls_this_round:
                 break  # Pure text response — done
+
+            # In transition phase, one round of tool calls is all we need.
+            # Don't loop back — Gemini would generate a huge narration in round 2.
+            if gemini.context.get("phase") == "transition":
+                print(f"[{_ts()}][GEMINI] Transition round complete — skipping follow-up")
+                break
 
             # Function calls were made — call Gemini again for follow-up voice response
             print(f"[{_ts()}][GEMINI] Round {round_num + 1}: {len(function_calls_this_round)} function call(s), continuing for follow-up...")
@@ -291,6 +359,13 @@ async def _process_gemini_response(
             print(f"[{_ts()}][TTS] Waiting for audio forwarding to complete...")
             await tts_recv_task
             print(f"[{_ts()}][TTS] Audio forwarding done")
+
+        # Signal frontend that the transition flow is complete (all tool calls
+        # executed, all TTS audio forwarded). Frontend uses this to disconnect
+        # voice and switch to loading phase.
+        if gemini.context.get("phase") == "transition":
+            print(f"[{_ts()}][VOICE] Transition complete — signaling frontend")
+            await _send_json(ws, {"type": "transition_complete"}, closed)
 
     except asyncio.CancelledError:
         print(f"[{_ts()}][GEMINI] ===== RESPONSE {response_id} CANCELLED (barge-in) =====")
@@ -328,6 +403,8 @@ async def voice_ws(websocket: WebSocket):
     gradium = GradiumService(api_key=GRADIUM_API_KEY)
     gemini = GeminiGuide(api_key=GEMINI_API_KEY)
     world_labs = WorldLabsService(api_key=WORLD_LABS_API_KEY)
+
+    deezer = DeezerService()
 
     stt_stream = None
     transcript_buffer = ""
@@ -446,7 +523,7 @@ async def voice_ws(websocket: WebSocket):
                     print(f"[{_ts()}][VOICE] Launching Gemini response task for turn #{turn_count}")
                     current_response = asyncio.create_task(
                         _process_gemini_response(
-                            user_text, websocket, gemini, gradium, world_labs, ws_closed
+                            user_text, websocket, gemini, gradium, world_labs, ws_closed, deezer
                         )
                     )
 
@@ -517,12 +594,12 @@ async def voice_ws(websocket: WebSocket):
                 )
                 current_response = asyncio.create_task(
                     _process_gemini_response(
-                        None, websocket, gemini, gradium, world_labs, ws_closed
+                        None, websocket, gemini, gradium, world_labs, ws_closed, deezer
                     )
                 )
 
             elif msg_type == "confirm_exploration":
-                # User pressed "Enter" — trigger AI goodbye + session summary
+                # User pressed "Enter" — trigger AI goodbye + session summary + loading messages + music
                 print(f"[{_ts()}][FE→BE] User confirmed exploration")
                 if current_response and not current_response.done():
                     current_response.cancel()
@@ -530,22 +607,33 @@ async def voice_ws(websocket: WebSocket):
                         await current_response
                     except (asyncio.CancelledError, Exception):
                         pass
-                # Inject system instruction telling Gemini to say goodbye
+                # Switch to transition phase — enables transition tool set
+                gemini.update_context(phase="transition")
+                # Inject system instruction for goodbye + all transition tool calls
                 gemini.conversation_history.append(
                     types.Content(
                         role="user",
                         parts=[types.Part(text=(
                             "[System: The user has pressed the Enter button to confirm they want "
-                            "to explore this location. Say a warm, heartfelt goodbye, wish them "
-                            "an incredible journey, and then call summarize_session with your "
-                            "summary of the user and a rich visual description of their chosen "
-                            "destination for 3D world generation.]"
+                            "to explore this location. Call ALL THREE tools in a single response:\n"
+                            "   - summarize_session: include a warm goodbye_text (1-2 sentences, "
+                            "reference something personal about the user), a detailed user_profile, "
+                            "and an extremely detailed world_description (8-12 sentences describing "
+                            "the scene for 3D generation — architecture, lighting, atmosphere, people, "
+                            "textures, colors, weather, vegetation, everything a film set designer "
+                            "would need)\n"
+                            "   - generate_loading_messages: 15 short, cute loading messages "
+                            "personalized to the user and destination (no periods, start with -ing verbs)\n"
+                            "   - select_music: choose music matching the era, region, and mood. "
+                            "Include a creative search_query for music search (e.g. 'ancient Roman lyre "
+                            "instrumental' or '1920s Parisian jazz cafe').\n"
+                            "Do NOT generate any text outside of tool calls.]"
                         ))]
                     )
                 )
                 current_response = asyncio.create_task(
                     _process_gemini_response(
-                        None, websocket, gemini, gradium, world_labs, ws_closed
+                        None, websocket, gemini, gradium, world_labs, ws_closed, deezer
                     )
                 )
 

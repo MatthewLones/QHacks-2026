@@ -24,6 +24,7 @@ function App() {
   const setPhase = useAppStore((s) => s.setPhase);
   const location = useAppStore((s) => s.location);
   const userProfile = useAppStore((s) => s.userProfile);
+  const transitionComplete = useAppStore((s) => s.transitionComplete);
   const confirmRequested = useAppStore((s) => s.confirmExplorationRequested);
   const clearConfirm = useAppStore((s) => s.clearConfirmExploration);
   const setSelectedYear = useSelectionStore((s) => s.setSelectedYear);
@@ -141,16 +142,18 @@ function App() {
     }
   }, [phase]);
 
-  // When session summary arrives, wait for goodbye audio then transition
+  // When backend signals transition is complete (goodbye TTS + all tool calls
+  // done), disconnect voice so STT stops immediately. Phase change to 'loading'
+  // is handled separately by handleJumpComplete when the hyperspace animation
+  // finishes. The 1.5s buffer lets any remaining TTS audio drain.
   useEffect(() => {
-    if (userProfile && phase === 'globe') {
+    if (transitionComplete) {
       const timer = setTimeout(() => {
         voice.disconnect();
-        setPhase('loading');
-      }, 4000); // 4s for goodbye TTS to finish playing
+      }, 1500);
       return () => clearTimeout(timer);
     }
-  }, [userProfile, phase, voice.disconnect, setPhase]);
+  }, [transitionComplete, voice.disconnect]);
 
   /* Determine if globe + UI should be visible */
   const showGlobe = phase === 'globe' || phase === 'landing';

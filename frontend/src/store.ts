@@ -71,6 +71,14 @@ interface AppState {
   isUserSpeaking: boolean;
   setMicLevel: (rms: number) => void;
 
+  // AI-generated loading messages (from generate_loading_messages tool call)
+  loadingMessages: string[];
+  setLoadingMessages: (messages: string[]) => void;
+
+  // Transition complete signal (backend finished goodbye + all tool calls)
+  transitionComplete: boolean;
+  setTransitionComplete: (v: boolean) => void;
+
   // Confirm exploration flow
   confirmExplorationRequested: boolean;
   requestConfirmExploration: () => void;
@@ -134,6 +142,12 @@ export const useAppStore = create<AppState>((set) => ({
   micLevel: 0,
   isUserSpeaking: false,
   setMicLevel: (rms) => set({ micLevel: rms, isUserSpeaking: rms > 0.02 }),
+
+  loadingMessages: [],
+  setLoadingMessages: (loadingMessages) => set({ loadingMessages }),
+
+  transitionComplete: false,
+  setTransitionComplete: (transitionComplete) => set({ transitionComplete }),
 
   confirmExplorationRequested: false,
   requestConfirmExploration: () => set({ confirmExplorationRequested: true }),

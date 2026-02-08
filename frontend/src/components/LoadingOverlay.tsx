@@ -1,78 +1,35 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '../store';
 import { useSelectionStore } from '../selectionStore';
-import { fetchLoadingPhrases } from '../utils/loadingPhrases';
 import './LoadingOverlay.css';
 
-const ROTATE_MS = 2600;
+const ROTATE_MS = 4000;
 
 function formatYear(year: number): string {
   if (year < 0) return `${Math.abs(year)} BCE`;
   return `${year} CE`;
 }
 
-function fallbackPhrases(location: string): string[] {
-  const loc = location.toLowerCase();
-  return [
-    `gathering supplies for ${loc}...`,
-    'checking maps under starlight...',
-    'tightening straps on worn satchels...',
-    'listening for distant footsteps...',
-    'preparing provisions for the road...',
-    'studying landmarks in the dark...',
-    'packing tools for the journey...',
-    'steadying breath before the crossing...',
-    'tracing routes across the landscape...',
-    'waiting for the right moment...',
-  ];
-}
-
 export default function LoadingOverlay() {
   const location = useAppStore((s) => s.location);
   const year = useSelectionStore((s) => s.selectedYear);
-  const era = useSelectionStore((s) => s.selectedEra);
+  const loadingMessages = useAppStore((s) => s.loadingMessages);
 
   const locationLabel = location?.name ?? 'Unknown location';
   const yearLabel = useMemo(() => formatYear(year), [year]);
   const subtitle = `Preparing ${yearLabel} ${locationLabel} for exploration`;
 
-  const [phrases, setPhrases] = useState<string[]>(() => fallbackPhrases(locationLabel));
+  // Show AI-generated messages, or a simple placeholder until they arrive
+  const phrases = loadingMessages.length > 0
+    ? loadingMessages
+    : ['Preparing your journey'];
+
   const [index, setIndex] = useState(0);
-  const requestKeyRef = useRef<string | null>(null);
 
+  // Reset index when AI-generated messages arrive
   useEffect(() => {
-    const requestKey = `${year}|${locationLabel}`;
-    if (requestKeyRef.current === requestKey) return;
-    requestKeyRef.current = requestKey;
-
-    const controller = new AbortController();
-    setPhrases(fallbackPhrases(locationLabel));
     setIndex(0);
-
-    fetchLoadingPhrases(
-      {
-        location: locationLabel,
-        year,
-        era,
-        lat: location?.lat,
-        lng: location?.lng,
-        count: 14,
-      },
-      controller.signal,
-    )
-      .then((next) => {
-        if (controller.signal.aborted) return;
-        if (next.length > 0) {
-          setPhrases(next);
-          setIndex(0);
-        }
-      })
-      .catch(() => {
-        // Keep fallback phrases on error.
-      });
-
-    return () => controller.abort();
-  }, [era, location?.lat, location?.lng, locationLabel, year]);
+  }, [loadingMessages.length]);
 
   useEffect(() => {
     if (phrases.length <= 1) return;
@@ -82,8 +39,7 @@ export default function LoadingOverlay() {
     return () => window.clearInterval(timer);
   }, [phrases]);
 
-  const rawPhrase = phrases[index] ?? 'preparing...';
-  const phrase = rawPhrase.replace(/^[\s|¦│▏▌▍▎▏–—•·-]+/u, '');
+  const phrase = phrases[index] ?? 'Preparing...';
 
   return (
     <div className="loading-overlay">

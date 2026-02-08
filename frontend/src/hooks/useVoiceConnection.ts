@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   VoiceConnection,
   type ConnectionStatus,
+  type MusicMessage,
 } from "../audio/VoiceConnection";
 import { useAppStore } from "../store";
 import { useSelectionStore } from "../selectionStore";
@@ -86,11 +87,25 @@ export function useVoiceConnection(): VoiceState {
       useAppStore.getState().setMicLevel(rms);
     });
 
+    // AI-generated loading messages for the loading screen
+    vc.on("loadingMessages", (messages: string[]) => {
+      useAppStore.getState().setLoadingMessages(messages);
+    });
+
+    // Backend signals all confirm_exploration tool calls are done
+    vc.on("transitionComplete", () => {
+      useAppStore.getState().setTransitionComplete(true);
+    });
+
     // Era-specific music from backend — crossfade from ambient to era track
-    vc.on("music", (trackUrl: string) => {
-      useAppStore.getState().setCurrentTrack(trackUrl);
-      useAppStore.getState().setMusicPlaying(true);
-      musicService.crossfadeTo(trackUrl, 2000);
+    // Both deezer (preview URL) and local sources provide a trackUrl
+    vc.on("music", (msg: MusicMessage) => {
+      if (msg.trackUrl) {
+        useAppStore.getState().setCurrentTrack(msg.trackUrl);
+        useAppStore.getState().setMusicPlaying(true);
+        musicService.crossfadeTo(msg.trackUrl, 2000);
+        console.log(`[MUSIC] ${msg.source}: ${msg.trackName ?? msg.trackUrl} by ${msg.artist ?? "unknown"}`);
+      }
     });
 
     return () => {
