@@ -418,6 +418,7 @@ async def voice_ws(websocket: WebSocket):
             msg_count = 0
             turn_ready = False
             last_stt_word_at = 0.0
+            turn_fired_at = 0.0
             while True:
                 try:
                     msg = await stt_stream.receive()
@@ -430,8 +431,13 @@ async def voice_ws(websocket: WebSocket):
                 if msg_type == "text":
                     text = msg["text"]
                     transcript_buffer += " " + text
-                    last_stt_word_at = time.time()
-                    print(f"[{_ts()}][STT] TRANSCRIPT: \"{text}\" | Buffer: \"{transcript_buffer.strip()}\"")
+                    # Ignore late STT words that arrive after a turn already fired —
+                    # they're trailing transcription, not new speech. Updating
+                    # last_stt_word_at would reset the debounce and risk double-firing.
+                    since_last_fire = time.time() - turn_fired_at
+                    if since_last_fire > 1.5:
+                        last_stt_word_at = time.time()
+                    print(f"[{_ts()}][STT] TRANSCRIPT: \"{text}\" | Buffer: \"{transcript_buffer.strip()}\"" + (f" (late, ignored for debounce)" if since_last_fire <= 1.5 else ""))
                     await _send_json(websocket, {
                         "type": "transcript",
                         "text": text,
@@ -468,9 +474,12 @@ async def voice_ws(websocket: WebSocket):
                         )
 
                     if max_inactivity > VAD_INACTIVITY_THRESHOLD and transcript_buffer.strip():
-                        if not turn_ready:
+                        # Don't re-arm turn_ready if we just fired — prevents double-firing
+                        # when late STT words arrive after the turn already launched.
+                        since_last_fire = time.time() - turn_fired_at
+                        if not turn_ready and since_last_fire > 2.0:
                             print(f"[{_ts()}][VAD] Turn READY — waiting {TURN_DEBOUNCE_S}s for STT to settle")
-                        turn_ready = True
+                            turn_ready = True
 
                 elif msg_type == "ready":
                     print(f"[{_ts()}][STT] Ready message received")
@@ -499,6 +508,7 @@ async def voice_ws(websocket: WebSocket):
                     transcript_buffer = ""
                     turn_ready = False
                     last_stt_word_at = 0.0
+                    turn_fired_at = time.time()
                     debounce_type = "post-interrupt" if since_interrupt < INTERRUPT_DEBOUNCE_WINDOW_S else "normal"
                     print(f"[{_ts()}][VOICE] ===== TURN #{turn_count} FIRED ({debounce_type} debounce={debounce}s) =====")
                     print(f"[{_ts()}][VOICE] User said: \"{user_text}\"")

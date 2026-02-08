@@ -6,6 +6,40 @@ Each entry includes what changed, why it was changed, and which files were affec
 
 ---
 
+## [Session 13] - 2026-02-08
+
+### Fixed
+- **Drop "CE" suffix for modern years on loading screen** — `formatYear()` now omits "CE" for years > 1300 (implied for modern dates). Years 1–1300 still show "CE", negative years still show "BCE".
+  - `frontend/src/components/LoadingOverlay.tsx` — Added early return `if (year > 1300) return String(year)`
+
+- **Voice stutter / double-turn-firing** — Fixed bug where AI response would start, cut off, then restart from scratch. Root cause: the `turn_ready` VAD flag was sticky and could re-arm during an active response when late STT words reset the debounce timer. Added three guards: (1) `turn_fired_at` timestamp prevents `turn_ready` from re-arming within 2s of last fire, (2) late STT words arriving within 1.5s of a fired turn don't reset `last_stt_word_at`, (3) `turn_fired_at` set on every turn dispatch.
+  - `backend/routers/voice.py` — Added `turn_fired_at` variable, gated `turn_ready` re-arming, guarded late STT word debounce reset
+
+- **WorldExplorer "bulb" rendering artifact** — Collider mesh from World Labs was being rendered as a translucent wireframe (opacity 0.08), overlapping the Gaussian splat world and creating a visible artifact when zooming. Collider meshes are "coarse mesh optimized for simple physics calculations" (per World Labs docs) and should not be visible. Set `visible = false` on collider mesh children instead.
+  - `frontend/src/components/WorldExplorer.tsx` — Replaced wireframe material modification with `child.visible = false`; confirmed quaternion `(1,0,0,0)` is correct OpenCV→OpenGL coordinate flip per SparkJS docs; verified SparkRenderer config (`clipXY=1.4`, `minAlpha`, `maxStdDev`) matches SparkJS defaults
+
+---
+
+## [Session 12] - 2026-02-07
+
+### Changed
+- **Merged frontend-v3 + ej/worldlabs → development-v3** — Combined Deezer music pipeline, loading messages, transition flow, and star fixes from frontend-v3 with EJ's WorldExplorer SparkJS Gaussian splat renderer, enhanced World Labs asset extraction, and world generation endpoints. Resolved conflicts in App.tsx, store.ts, voice.py, world_labs.py, worlds.py, package.json.
+  - `frontend/src/App.tsx` — frontend-v3 transition flow + EJ's WorldExplorer + world generation
+  - `frontend/src/store.ts` — Both `loadingMessages`/`transitionComplete` and `WorldRenderableAssets`
+  - `backend/routers/voice.py` — Deezer/transition base + EJ's enhanced `_poll_world_and_notify`
+  - `backend/services/world_labs.py` — EJ's superset with `extract_renderable_assets()`, `fetch_operation()`
+  - `backend/routers/worlds.py` — EJ's enhanced status endpoints + `/hardcoded/start`
+  - `frontend/src/components/WorldExplorer.tsx` — NEW: 531-line SparkJS Gaussian splat renderer
+  - `frontend/src/components/WorldExplorer.css` — NEW: WorldExplorer styles
+  - `frontend/src/utils/worldGeneration.ts` — NEW: World generation + REST polling utility
+  - `frontend/package.json` — Added `@sparkjsdev/spark` dependency
+
+- **Dynamic world generation from AI description** — Replaced hardcoded prompt (`backend/hardcoded_prompt.txt`) with dynamic `world_description` from Gemini's `summarize_session` tool call. When user confirms exploration, Gemini generates a rich 8-12 sentence scene description. During loading phase, frontend sends this description to `/api/worlds/generate` → World Labs creates a 3D world from it → WorldExplorer renders it.
+  - `frontend/src/utils/worldGeneration.ts` — Renamed `generateWorldFromHardcodedPrompt()` → `generateWorld(sceneDescription)`, hits `/api/worlds/generate` instead of `/api/worlds/hardcoded/start`, polls `/api/worlds/status/{id}` instead of `/api/worlds/hardcoded/status/{id}`
+  - `frontend/src/App.tsx` — Reads `worldDescription` from store, passes to `generateWorld()` in loading phase useEffect; waits for `worldDescription` to be set before triggering generation
+
+---
+
 ## [Session 11] - 2026-02-07 18:30
 
 ### Added

@@ -7,6 +7,7 @@ const ROTATE_MS = 4000;
 
 function formatYear(year: number): string {
   if (year < 0) return `${Math.abs(year)} BCE`;
+  if (year > 1300) return String(year);
   return `${year} CE`;
 }
 

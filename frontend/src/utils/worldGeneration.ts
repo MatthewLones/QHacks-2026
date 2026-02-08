@@ -1,4 +1,4 @@
-interface HardcodedStartResponse {
+interface GenerateStartResponse {
   operation_id: string;
 }
 
@@ -12,7 +12,7 @@ interface RenderableAssetsResponse {
   world_marble_url: string | null;
 }
 
-interface HardcodedStatusResponse {
+interface StatusResponse {
   done: boolean;
   status: 'generating' | 'ready' | 'error';
   operation_id: string;
@@ -53,31 +53,39 @@ function getBackendBaseUrl(): string {
   return '';
 }
 
-async function postStart(signal?: AbortSignal): Promise<HardcodedStartResponse> {
+async function postGenerate(
+  sceneDescription: string,
+  signal?: AbortSignal,
+): Promise<GenerateStartResponse> {
   const baseUrl = getBackendBaseUrl();
   const url = baseUrl
-    ? `${baseUrl}/api/worlds/hardcoded/start`
-    : '/api/worlds/hardcoded/start';
+    ? `${baseUrl}/api/worlds/generate`
+    : '/api/worlds/generate';
 
-  const res = await fetch(url, { method: 'POST', signal });
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scene_description: sceneDescription }),
+    signal,
+  });
   if (!res.ok) {
-    throw new Error(`hardcoded world start failed: ${res.status}`);
+    throw new Error(`world generation start failed: ${res.status}`);
   }
-  return (await res.json()) as HardcodedStartResponse;
+  return (await res.json()) as GenerateStartResponse;
 }
 
-async function getStatus(operationId: string, signal?: AbortSignal): Promise<HardcodedStatusResponse> {
+async function getStatus(operationId: string, signal?: AbortSignal): Promise<StatusResponse> {
   const baseUrl = getBackendBaseUrl();
   const qs = import.meta.env.DEV ? '?debug=1' : '';
   const url = baseUrl
-    ? `${baseUrl}/api/worlds/hardcoded/status/${operationId}${qs}`
-    : `/api/worlds/hardcoded/status/${operationId}${qs}`;
+    ? `${baseUrl}/api/worlds/status/${operationId}${qs}`
+    : `/api/worlds/status/${operationId}${qs}`;
 
   const res = await fetch(url, { method: 'GET', signal });
   if (!res.ok) {
-    throw new Error(`hardcoded world status failed: ${res.status}`);
+    throw new Error(`world status poll failed: ${res.status}`);
   }
-  return (await res.json()) as HardcodedStatusResponse;
+  return (await res.json()) as StatusResponse;
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -96,11 +104,16 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-export async function generateWorldFromHardcodedPrompt(
+/**
+ * Start World Labs generation using Gemini's world_description from
+ * summarize_session, then poll until the 3D assets are ready.
+ */
+export async function generateWorld(
+  sceneDescription: string,
   signal?: AbortSignal,
 ): Promise<RenderableWorldResult> {
-  const start = await postStart(signal);
-  console.log('[WORLD] hardcoded generation started:', start.operation_id);
+  const start = await postGenerate(sceneDescription, signal);
+  console.log('[WORLD] generation started:', start.operation_id);
   let attempts = 0;
 
   while (true) {

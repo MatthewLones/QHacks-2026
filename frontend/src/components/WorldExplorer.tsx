@@ -362,7 +362,7 @@ export default function WorldExplorer() {
         if (disposed) return;
 
         worldMesh = new SplatMesh({ packedSplats, editable: false });
-        worldMesh.quaternion.set(1, 0, 0, 0);
+        worldMesh.quaternion.set(1, 0, 0, 0);  // 180° X rotation: OpenCV→OpenGL coord flip
         worldMesh.frustumCulled = false;
         scene.add(worldMesh);
         debugWindow.__worldDebug = { ...debugWindow.__worldDebug, worldMesh };
@@ -379,24 +379,13 @@ export default function WorldExplorer() {
             const gltf = await gltfLoader.loadAsync(colliderMeshUrl);
             if (!disposed) {
               colliderRoot = gltf.scene;
+              // Collider mesh is for physics/raycasting only — hide it visually
+              // to prevent rendering artifacts (visible "bulb" overlapping splats).
               colliderRoot.traverse((child) => {
-                const mesh = child as THREE.Mesh;
-                if (!mesh.isMesh || !mesh.material) return;
-                const toWireframe = (material: THREE.Material) => {
-                  if (material instanceof THREE.MeshStandardMaterial || material instanceof THREE.MeshBasicMaterial) {
-                    material.transparent = true;
-                    material.opacity = 0.08;
-                    material.wireframe = true;
-                  }
-                };
-                if (Array.isArray(mesh.material)) {
-                  mesh.material.forEach(toWireframe);
-                } else {
-                  toWireframe(mesh.material);
-                }
+                child.visible = false;
               });
               scene.add(colliderRoot);
-              console.log('[WORLD-RENDER] collider mesh loaded:', colliderMeshUrl);
+              console.log('[WORLD-RENDER] collider mesh loaded (hidden):', colliderMeshUrl);
             }
           } catch {
             // Non-blocking: mesh is optional.

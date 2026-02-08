@@ -17,7 +17,7 @@ import { useAppStore } from './store';
 import { useSelectionStore } from './selectionStore';
 import { useVoiceConnection } from './hooks/useVoiceConnection';
 import { musicService } from './audio/MusicService';
-import { generateWorldFromHardcodedPrompt } from './utils/worldGeneration';
+import { generateWorld } from './utils/worldGeneration';
 
 type WarpState = 'idle' | 'initiating' | 'jumping';
 
@@ -29,6 +29,7 @@ function App() {
   const transitionComplete = useAppStore((s) => s.transitionComplete);
   const confirmRequested = useAppStore((s) => s.confirmExplorationRequested);
   const clearConfirm = useAppStore((s) => s.clearConfirmExploration);
+  const worldDescription = useAppStore((s) => s.worldDescription);
   const setWorldStatus = useAppStore((s) => s.setWorldStatus);
   const setRenderableWorldData = useAppStore((s) => s.setRenderableWorldData);
   const setSelectedYear = useSelectionStore((s) => s.setSelectedYear);
@@ -162,22 +163,24 @@ function App() {
     }
   }, [transitionComplete, voice.disconnect]);
 
-  // Trigger hardcoded World Labs generation once loading starfield is visible.
+  // Trigger World Labs generation once loading phase begins and we have a
+  // world_description from Gemini's summarize_session tool call.
   useEffect(() => {
     if (phase !== 'loading') {
       loadingGenerationStartedRef.current = false;
       return;
     }
     if (loadingGenerationStartedRef.current) return;
+    if (!worldDescription) return; // wait for summarize_session to provide the prompt
     loadingGenerationStartedRef.current = true;
 
     const abortController = new AbortController();
     setWorldStatus('generating');
-    console.log('[WORLD] loading phase entered, requesting hardcoded generation...');
+    console.log('[WORLD] loading phase entered, generating world from AI description...');
 
     void (async () => {
       try {
-        const result = await generateWorldFromHardcodedPrompt(abortController.signal);
+        const result = await generateWorld(worldDescription, abortController.signal);
         if (abortController.signal.aborted) return;
         console.log('[WORLD] generation complete, switching to exploring:', {
           worldId: result.worldId,
@@ -199,7 +202,7 @@ function App() {
         setPhase('exploring');
       } catch (err) {
         if (abortController.signal.aborted) return;
-        console.error('[WORLD] hardcoded generation failed:', err);
+        console.error('[WORLD] generation failed:', err);
         setWorldStatus('error');
       }
     })();
@@ -207,7 +210,7 @@ function App() {
     return () => {
       abortController.abort();
     };
-  }, [phase, setPhase, setRenderableWorldData, setWorldStatus]);
+  }, [phase, worldDescription, setPhase, setRenderableWorldData, setWorldStatus]);
 
   /* Determine if globe + UI should be visible */
   const showGlobe = phase === 'globe' || phase === 'landing';
