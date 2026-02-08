@@ -27,6 +27,7 @@ function App() {
   const phase = useAppStore((s) => s.phase);
   const setPhase = useAppStore((s) => s.setPhase);
   const location = useAppStore((s) => s.location);
+  const userProfile = useAppStore((s) => s.userProfile);
   const transitionComplete = useAppStore((s) => s.transitionComplete);
   const confirmRequested = useAppStore((s) => s.confirmExplorationRequested);
   const clearConfirm = useAppStore((s) => s.clearConfirmExploration);

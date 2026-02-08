@@ -6,6 +6,21 @@ Each entry includes what changed, why it was changed, and which files were affec
 
 ---
 
+## [Session 23] - 2026-02-08
+
+### Added
+- **Merged EJ's devpost branch (`ej/devpost`) into development-v4** — Brings in DevPost submission writeup, hyperspace whoosh SFX, and jump duration tuning (5s → 4s). Auto-merged cleanly with no textual conflicts.
+  - `devpost.md` (new)
+  - `frontend/public/sfx/BIG LONG WHOOSH SOUND EFFECT __ SOUND FX.mp3` (new)
+  - `frontend/src/App.tsx` (SFX playback logic)
+  - `frontend/src/components/HyperspaceCanvas.tsx` (jump duration 5000 → 4000ms)
+
+### Fixed
+- **Re-added `userProfile` selector after merge** — EJ's branch removed `const userProfile = useAppStore((s) => s.userProfile)` from App.tsx, but our `sendExploreStart` effect (Phase 2 exploring) still references it. Re-added to prevent build failure.
+  - `frontend/src/App.tsx`
+
+---
+
 ## [Session 22] - 2026-02-08
 
 ### Fixed
