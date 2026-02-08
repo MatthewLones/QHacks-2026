@@ -12,6 +12,16 @@ export interface TimePeriodData {
   label: string;
 }
 
+export interface WorldRenderableAssets {
+  spzUrls: Record<string, string>;
+  defaultSpzUrl: string | null;
+  colliderMeshUrl: string | null;
+  panoUrl: string | null;
+  thumbnailUrl: string | null;
+  caption: string | null;
+  worldMarbleUrl: string | null;
+}
+
 export type TileMode = 'dark' | 'voyager';
 
 interface AppState {
@@ -39,8 +49,10 @@ interface AppState {
   worldStatus: 'idle' | 'generating' | 'ready' | 'error';
   worldId: string | null;
   splatUrl: string | null;
+  worldAssets: WorldRenderableAssets | null;
   setWorldStatus: (s: AppState['worldStatus']) => void;
   setWorldData: (id: string, url: string) => void;
+  setRenderableWorldData: (id: string, assets: WorldRenderableAssets) => void;
 
   currentTrack: string | null;
   isMusicPlaying: boolean;
@@ -110,8 +122,30 @@ export const useAppStore = create<AppState>((set) => ({
   worldStatus: 'idle',
   worldId: null,
   splatUrl: null,
+  worldAssets: null,
   setWorldStatus: (worldStatus) => set({ worldStatus }),
-  setWorldData: (worldId, splatUrl) => set({ worldId, splatUrl, worldStatus: 'ready' }),
+  setWorldData: (worldId, splatUrl) =>
+    set({
+      worldId,
+      splatUrl,
+      worldStatus: 'ready',
+      worldAssets: {
+        spzUrls: splatUrl ? { selected: splatUrl } : {},
+        defaultSpzUrl: splatUrl,
+        colliderMeshUrl: null,
+        panoUrl: null,
+        thumbnailUrl: null,
+        caption: null,
+        worldMarbleUrl: null,
+      },
+    }),
+  setRenderableWorldData: (worldId, assets) =>
+    set({
+      worldId,
+      splatUrl: assets.defaultSpzUrl,
+      worldAssets: assets,
+      worldStatus: 'ready',
+    }),
 
   currentTrack: null,
   isMusicPlaying: false,

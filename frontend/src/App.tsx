@@ -7,6 +7,7 @@ import TimeWheelSelector from './components/TimeWheelSelector';
 import TravelTo from './components/TravelTo';
 import GlobeStarfield from './components/GlobeStarfield';
 import LoadingOverlay from './components/LoadingOverlay';
+import WorldExplorer from './components/WorldExplorer';
 import HyperspaceCanvas, { DEFAULT_IDLE_VELOCITY } from './components/HyperspaceCanvas';
 import type { HyperspaceHandle } from './components/HyperspaceCanvas';
 import GuideSubtitle from './components/GuideSubtitle';
@@ -16,6 +17,7 @@ import { useAppStore } from './store';
 import { useSelectionStore } from './selectionStore';
 import { useVoiceConnection } from './hooks/useVoiceConnection';
 import { musicService } from './audio/MusicService';
+import { generateWorldFromHardcodedPrompt } from './utils/worldGeneration';
 
 type WarpState = 'idle' | 'initiating' | 'jumping';
 
@@ -27,6 +29,8 @@ function App() {
   const transitionComplete = useAppStore((s) => s.transitionComplete);
   const confirmRequested = useAppStore((s) => s.confirmExplorationRequested);
   const clearConfirm = useAppStore((s) => s.clearConfirmExploration);
+  const setWorldStatus = useAppStore((s) => s.setWorldStatus);
+  const setRenderableWorldData = useAppStore((s) => s.setRenderableWorldData);
   const setSelectedYear = useSelectionStore((s) => s.setSelectedYear);
   const selectedYear = useSelectionStore((s) => s.selectedYear);
   const selectedEra = useSelectionStore((s) => s.selectedEra);
@@ -45,6 +49,7 @@ function App() {
   const voice = useVoiceConnection();
   const voiceStartedRef = useRef(false);
   const sessionStartSentRef = useRef(false);
+  const loadingGenerationStartedRef = useRef(false);
 
   /* When the landing warp finishes:
      1. Set the chosen year in the selection store (updates era + meta)
@@ -157,6 +162,53 @@ function App() {
     }
   }, [transitionComplete, voice.disconnect]);
 
+  // Trigger hardcoded World Labs generation once loading starfield is visible.
+  useEffect(() => {
+    if (phase !== 'loading') {
+      loadingGenerationStartedRef.current = false;
+      return;
+    }
+    if (loadingGenerationStartedRef.current) return;
+    loadingGenerationStartedRef.current = true;
+
+    const abortController = new AbortController();
+    setWorldStatus('generating');
+    console.log('[WORLD] loading phase entered, requesting hardcoded generation...');
+
+    void (async () => {
+      try {
+        const result = await generateWorldFromHardcodedPrompt(abortController.signal);
+        if (abortController.signal.aborted) return;
+        console.log('[WORLD] generation complete, switching to exploring:', {
+          worldId: result.worldId,
+          displayName: result.displayName,
+          defaultSpzUrl: result.assets.defaultSpzUrl,
+          marbleUrl: result.assets.worldMarbleUrl,
+          spzVariants: Object.keys(result.assets.spzUrls),
+        });
+
+        setRenderableWorldData(result.worldId, {
+          spzUrls: result.assets.spzUrls,
+          defaultSpzUrl: result.assets.defaultSpzUrl,
+          colliderMeshUrl: result.assets.colliderMeshUrl,
+          panoUrl: result.assets.panoUrl,
+          thumbnailUrl: result.assets.thumbnailUrl,
+          caption: result.assets.caption,
+          worldMarbleUrl: result.assets.worldMarbleUrl,
+        });
+        setPhase('exploring');
+      } catch (err) {
+        if (abortController.signal.aborted) return;
+        console.error('[WORLD] hardcoded generation failed:', err);
+        setWorldStatus('error');
+      }
+    })();
+
+    return () => {
+      abortController.abort();
+    };
+  }, [phase, setPhase, setRenderableWorldData, setWorldStatus]);
+
   /* Determine if globe + UI should be visible */
   const showGlobe = phase === 'globe' || phase === 'landing';
   const showGlobeUI = phase === 'globe' && warpState === 'idle';
@@ -220,9 +272,7 @@ function App() {
       )}
 
       {phase === 'exploring' && (
-        <div className="flex items-center justify-center w-full h-full">
-          <p className="text-white/30 text-lg">World explorer coming soon...</p>
-        </div>
+        <WorldExplorer />
       )}
     </div>
   );
