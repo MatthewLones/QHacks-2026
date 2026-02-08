@@ -6,6 +6,31 @@ Each entry includes what changed, why it was changed, and which files were affec
 
 ---
 
+## [Session 25] - 2026-02-08
+
+### Fixed
+- **World Labs model still running mini despite service change** — The default in `world_labs.py` was updated to `Marble 0.1-plus`, but the frontend's REST endpoint uses `GenerateRequest` Pydantic model in `worlds.py` which had its own default of `Marble 0.1-mini`. Since the frontend doesn't send a `model` field, Pydantic filled in `mini`, overriding the service default. Fixed the Pydantic default too.
+  - `backend/routers/worlds.py`
+  - `backend/services/world_labs.py`
+
+---
+
+## [Session 24] - 2026-02-08
+
+### Fixed
+- **TTS not producing audio in exploring phase (async Gemini streaming)** — `generate_content_stream` was called synchronously (`for chunk in response`), blocking the asyncio event loop while waiting for each Gemini chunk. This prevented the TTS audio forwarding task from running concurrently, causing audio to pile up or never reach the frontend. In exploring phase with image attachments, Gemini takes significantly longer per chunk, making this blocking fatal. Switched to `client.aio.models.generate_content_stream()` with `async for` so TTS forwarding runs concurrently.
+  - `backend/services/gemini_guide.py`
+- **Gemini generating only tool calls with no spoken text in exploring** — Despite prompt instructions, Gemini with `mode="AUTO"` sometimes generates only `generate_fact` calls with zero spoken text when an image is attached. Added a safety net: after the function call loop, if `full_response_text` is empty, a system message forces Gemini to produce 1-2 spoken sentences (no tools). Guarantees the user always hears a voice response.
+  - `backend/routers/voice.py`
+- **Explore track music not found (silent second phase)** — If Deezer only matched 1 of 5 song suggestions, no explore track was sent. Frontend had no music for the exploring phase. Added: (1) broader fallback searches using region + era keywords, (2) last-resort reuse of loading track for both phases so exploring is never silent.
+  - `backend/routers/voice.py`
+
+### Changed
+- **Song suggestions increased from 5 to 7** — More suggestions give Deezer more chances to find two distinct tracks (loading + exploring), especially for obscure regions.
+  - `backend/services/gemini_guide.py`
+
+---
+
 ## [Session 23] - 2026-02-08
 
 ### Added

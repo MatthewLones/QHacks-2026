@@ -261,12 +261,13 @@ _SELECT_MUSIC = types.FunctionDeclaration(
                 type="ARRAY",
                 items=types.Schema(type="STRING"),
                 description=(
-                    "A list of 5 real song names (with artist) to search for on a music "
+                    "A list of 7 real song names (with artist) to search for on a music "
                     "streaming service. Pick songs that genuinely fit the era, region, and "
-                    "mood — any genre, any era, famous or obscure. Format each entry as "
+                    "mood — any genre, any era, famous or obscure. Include a mix of well-known "
+                    "and niche tracks to maximise search hits. Format each entry as "
                     "'Song Title - Artist'. Examples: 'Clair de Lune - Debussy', "
                     "'Take Five - Dave Brubeck', 'Sakura - Traditional Japanese'. "
-                    "The system will try each in order until one is found."
+                    "The system needs TWO songs (loading + exploring), so variety matters."
                 ),
             ),
         },
@@ -414,7 +415,7 @@ class GeminiGuide:
         config = self._build_config()
         logger.info("Calling gemini-2.5-flash with %d messages", len(self.conversation_history))
 
-        response = self.client.models.generate_content_stream(
+        response = await self.client.aio.models.generate_content_stream(
             model="gemini-2.5-flash",
             contents=self.conversation_history,
             config=config,
@@ -423,7 +424,7 @@ class GeminiGuide:
         full_text = ""
         function_calls = []
 
-        for chunk in response:
+        async for chunk in response:
             if not chunk.candidates or not chunk.candidates[0].content:
                 continue
             for part in chunk.candidates[0].content.parts:

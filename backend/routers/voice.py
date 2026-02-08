@@ -136,6 +136,30 @@ async def _handle_function_call(
                             break  # Found both
                     else:
                         print(f"[{_ts()}][FUNC] Deezer: 0 results for '{song}', trying next...")
+
+                # If we found loading but not explore, try broader fallback searches
+                if loading_track and not explore_track:
+                    era = args.get("era", "")
+                    region = args.get("region", "")
+                    fallback_queries = [
+                        f"{region} traditional music",
+                        f"{region} {era} music",
+                        f"{region} instrumental",
+                    ]
+                    for query in fallback_queries:
+                        results = await deezer.search_tracks(query, limit=5)
+                        if results:
+                            # Pick a different track than loading if possible
+                            for r in results:
+                                if r["preview_url"] != loading_track["preview_url"]:
+                                    explore_track = r
+                                    break
+                            if not explore_track:
+                                explore_track = results[0]
+                            if explore_track:
+                                print(f"[{_ts()}][FUNC] Deezer explore fallback: '{explore_track['title']}' for query '{query}'")
+                                break
+
                 if not loading_track:
                     print(f"[{_ts()}][FUNC] Deezer: 0 results for all {len(song_suggestions)} song suggestions")
             except Exception as e:
@@ -155,7 +179,11 @@ async def _handle_function_call(
                 music_msg["exploreArtist"] = explore_track["artist"]
                 print(f"[{_ts()}][FUNC] Music queue: loading=\"{loading_track['title']}\", explore=\"{explore_track['title']}\"")
             else:
-                print(f"[{_ts()}][FUNC] Music queue: loading=\"{loading_track['title']}\" (no second track found)")
+                # Last resort: reuse loading track for exploring phase too
+                music_msg["exploreTrackUrl"] = loading_track["preview_url"]
+                music_msg["exploreTrackName"] = loading_track["title"]
+                music_msg["exploreArtist"] = loading_track["artist"]
+                print(f"[{_ts()}][FUNC] Music queue: loading=\"{loading_track['title']}\" (reusing for explore — no second track)")
             await _send_json(ws, music_msg, closed)
             gemini.add_function_result(name, {"status": "playing_deezer", "track": loading_track["title"]})
         else:
@@ -388,6 +416,30 @@ async def _process_gemini_response(
             print(f"[{_ts()}][GEMINI] Round {round_num + 1}: {len(function_calls_this_round)} function call(s), continuing for follow-up...")
             input_text = None  # No new user message — continue from function result
             frame_image_part = None  # Only attach frame on first round
+
+        # Safety net: if Gemini only generated function calls with no spoken
+        # text, force one more call explicitly requesting speech. This prevents
+        # silent responses in exploring phase where Gemini sometimes prioritises
+        # tool calls (generate_fact) over spoken output.
+        if not full_response_text.strip() and not is_transition and tts_stream:
+            print(f"[{_ts()}][GEMINI] WARNING: No spoken text generated — forcing voice follow-up")
+            gemini.conversation_history.append(
+                types.Content(role="user", parts=[types.Part(text=(
+                    "[System: You just called tools but produced no spoken text. "
+                    "The user cannot hear you. Respond NOW with 1-2 spoken sentences "
+                    "about what you just shared. Do NOT call any tools.]"
+                ))])
+            )
+            async for chunk in gemini.generate_response(None):
+                if chunk["type"] == "text":
+                    text_piece = chunk["text"]
+                    full_response_text += text_piece
+                    gemini_chunk_count += 1
+                    print(f"[{_ts()}][GEMINI] Forced chunk #{gemini_chunk_count}: \"{text_piece}\"")
+                    await _send_json(ws, {"type": "guide_text", "text": text_piece, "responseId": response_id}, closed)
+                    tts_text = _sanitize_for_tts(text_piece)
+                    if tts_text.strip():
+                        await tts_stream.send_text(tts_text)
 
         print(f"[{_ts()}][GEMINI] Response complete. {gemini_chunk_count} text chunks, {len(full_response_text)} chars")
 
